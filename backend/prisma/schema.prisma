@@ -13,3 +13,38 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model Study {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  title     String
+  createdAt DateTime  @default(now())
+  responses Response[]
+}
+
+model Interviewer {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  fullName  String?
+  responses Response[]
+}
+
+model Response {
+  id            String   @id @default(uuid())
+  studyId       String
+  respondentId  String?
+  interviewerId String?
+  status        String?
+  isComplete    Boolean  @default(false)
+  durationSec   Int?
+  startTime     DateTime?
+  endTime       DateTime?
+  startDate     DateTime?
+  startHour     Int?
+  region        String?
+  sourceFile    String
+  createdAt     DateTime  @default(now())
+
+  study       Study       @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  interviewer Interviewer?@relation(fields: [interviewerId], references: [id])
+}
