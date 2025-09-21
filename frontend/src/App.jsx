@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell, Download, Moon, Sun,
-  Grid2X2, Activity, LineChart, Users, History, Settings
+  Grid2X2, Activity, LineChart, Users, History, Settings, LogOut
 } from "lucide-react";
 
 import Overview from "./pages/Overview.jsx";
@@ -9,12 +9,45 @@ import Completion from "./pages/Completion.jsx";
 import Predictive from "./pages/Predictive.jsx";
 import FieldMgmt from "./pages/FieldMgmt.jsx";
 import AuditTrail from "./pages/AuditTrail.jsx";
+import Login from "./pages/Login.jsx";   // new page
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
   const [dark, setDark] = useState(false);
   const [active, setActive] = useState("overview");
+
+  // initialize user from localStorage
+  const [user, setUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem("auth_user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // keep localStorage in sync
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem("auth_user", JSON.stringify(user));
+      if (!localStorage.getItem("auth_token")) {
+        localStorage.setItem("auth_token", "demo-token");
+      }
+    } else {
+      localStorage.removeItem("auth_user");
+      localStorage.removeItem("auth_token");
+    }
+  }, [user]);
+
+  // not logged in → show Login page
+  if (!user) {
+    return <Login onLogin={setUser} />;
+  }
+
+  function handleLogout() {
+    setUser(null); // effect clears storage
+  }
 
   return (
     <div className={dark ? "dark" : ""}>
@@ -30,11 +63,17 @@ export default function App() {
           </div>
 
           <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-            <SideLink icon={<Grid2X2 size={18} />} label="Overview"            active={active==="overview"}  onClick={()=>setActive("overview")} />
-            <SideLink icon={<Activity size={18} />} label="Completion"          active={active==="completion"} onClick={()=>setActive("completion")} />
-            <SideLink icon={<LineChart size={18} />} label="Predictive Insights" active={active==="predictive"} onClick={()=>setActive("predictive")} />
-            <SideLink icon={<Users size={18} />} label="Field Management"       active={active==="field"}     onClick={()=>setActive("field")} />
-            <SideLink icon={<History size={18} />} label="Audit Trail"          active={active==="audit"}     onClick={()=>setActive("audit")} />
+            <SideLink icon={<Grid2X2 size={18} />} label="Overview"
+              active={active === "overview"} onClick={() => setActive("overview")} />
+            <SideLink icon={<Activity size={18} />} label="Completion"
+              active={active === "completion"} onClick={() => setActive("completion")} />
+            <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
+              active={active === "predictive"} onClick={() => setActive("predictive")} />
+            <SideLink icon={<Users size={18} />} label="Field Management"
+              active={active === "field"} onClick={() => setActive("field")} />
+            <SideLink icon={<History size={18} />} label="Audit Trail"
+              active={active === "audit"} onClick={() => setActive("audit")} />
+
             <div className="pt-2">
               <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
               <SideLink icon={<Settings size={18} />} label="Settings" />
@@ -43,29 +82,31 @@ export default function App() {
 
           <div className="px-3 py-4 border-t border-white/10">
             <div className="text-xs mb-1 text-white/80">Logged in as</div>
-            <div className="text-sm font-medium">Hello, Admin</div>
+            <div className="text-sm font-medium">Hello, {user.name}</div>
           </div>
         </aside>
 
-        {/* Main */}
+        {/* Main content */}
         <div className="flex-1 flex min-w-0 flex-col">
           {/* Header */}
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
             <Breadcrumb active={active} />
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
-              <button className="btn-ghost" onClick={()=>setDark(v=>!v)}>{dark ? <Sun size={18}/> : <Moon size={18}/>}</button>
               <button className="btn-ghost"><Download size={16}/> Export</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+                <LogOut size={16}/> Logout
+              </button>
             </div>
           </header>
 
-          {/* Content */}
+          {/* Page body */}
           <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-            {active === "overview"   && <Overview   />}
+            {active === "overview" && <Overview />}
             {active === "completion" && <Completion />}
             {active === "predictive" && <Predictive />}
-            {active === "field"      && <FieldMgmt  />}
-            {active === "audit"      && <AuditTrail />}
+            {active === "field" && <FieldMgmt />}
+            {active === "audit" && <AuditTrail />}
           </main>
         </div>
       </div>
