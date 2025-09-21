@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Card, KPI, Filter } from "../components/ui";
+import { Card, KPI, Filter } from "../../components/ui";
 
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 

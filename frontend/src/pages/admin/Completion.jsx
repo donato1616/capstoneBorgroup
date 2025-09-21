@@ -1,4 +1,4 @@
-import { Filter } from "../components/ui";
+import { Filter } from "../../components/ui";
 export default function Completion() {
   return (
     <div className="space-y-6">

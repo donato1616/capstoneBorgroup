@@ -1,21 +1,34 @@
 import { useEffect, useState } from "react";
 import {
-  Bell, Download, Moon, Sun,
-  Grid2X2, Activity, LineChart, Users, History, Settings, LogOut
+  Bell, Download, Grid2X2, Activity, LineChart, Users, History,
+  Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
+  Megaphone, UserCircle
 } from "lucide-react";
 
-import Overview from "./pages/Overview.jsx";
-import Completion from "./pages/Completion.jsx";
-import Predictive from "./pages/Predictive.jsx";
-import FieldMgmt from "./pages/FieldMgmt.jsx";
-import AuditTrail from "./pages/AuditTrail.jsx";
-import Login from "./pages/Login.jsx";   // new page
+import Login from "./pages/Login.jsx";
+
+// Admin pages
+import Overview from "./pages/admin/Overview.jsx";
+import Completion from "./pages/admin/Completion.jsx";
+import Predictive from "./pages/admin/Predictive.jsx";
+import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
+import AuditTrail from "./pages/admin/AuditTrail.jsx";
+import AdminProfile from "./pages/admin/AdminProfile.jsx";
+
+// Field researcher pages
+import FieldHome from "./pages/field/FieldHome.jsx";
+import MySurveys from "./pages/field/MySurveys.jsx";
+import Assignments from "./pages/field/Assignments.jsx";
+import Uploads from "./pages/field/Uploads.jsx";
+import Announcements from "./pages/field/Announcements.jsx";
+import Profile from "./pages/field/Profile.jsx";
+
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
-  const [dark, setDark] = useState(false);
-  const [active, setActive] = useState("overview");
+  const [active, setActive] = useState("overview");       // admin tabs
+  const [activeField, setActiveField] = useState("home"); // field tabs
 
   // initialize user from localStorage
   const [user, setUser] = useState(() => {
@@ -40,57 +53,61 @@ export default function App() {
     }
   }, [user]);
 
-  // not logged in → show Login page
   if (!user) {
     return <Login onLogin={setUser} />;
   }
 
   function handleLogout() {
-    setUser(null); // effect clears storage
+    setUser(null);
   }
 
-  return (
-    <div className={dark ? "dark" : ""}>
+  // ================= FIELD RESEARCHER VIEW =================
+  if (user.role === "field") {
+    return (
       <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
-        {/* Sidebar */}
+        {/* Sidebar (Field) */}
         <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
           <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
             <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
             <div>
               <div className="text-sm font-semibold tracking-wide">EBRS Insights</div>
-              <div className="text-xs text-white/80">Admin Console</div>
+              <div className="text-xs text-white/80">Field Portal</div>
             </div>
           </div>
 
           <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-            <SideLink icon={<Grid2X2 size={18} />} label="Overview"
-              active={active === "overview"} onClick={() => setActive("overview")} />
-            <SideLink icon={<Activity size={18} />} label="Completion"
-              active={active === "completion"} onClick={() => setActive("completion")} />
-            <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
-              active={active === "predictive"} onClick={() => setActive("predictive")} />
-            <SideLink icon={<Users size={18} />} label="Field Management"
-              active={active === "field"} onClick={() => setActive("field")} />
-            <SideLink icon={<History size={18} />} label="Audit Trail"
-              active={active === "audit"} onClick={() => setActive("audit")} />
-
+            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard"
+              active={activeField === "home"} onClick={() => setActiveField("home")} />
+            <SideLink icon={<ClipboardList size={18} />} label="My Surveys"
+              active={activeField === "surveys"} onClick={() => setActiveField("surveys")} />
+            <SideLink icon={<Users size={18} />} label="Assignments"
+              active={activeField === "assignments"} onClick={() => setActiveField("assignments")} />
+            <SideLink icon={<UploadIcon size={18} />} label="Uploads"
+              active={activeField === "uploads"} onClick={() => setActiveField("uploads")} />
+            <SideLink icon={<Megaphone size={18} />} label="Announcements"
+              active={activeField === "announcements"} onClick={() => setActiveField("announcements")} />
             <div className="pt-2">
-              <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
-              <SideLink icon={<Settings size={18} />} label="Settings" />
+              <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
+              <SideLink icon={<UserCircle size={18} />} label="Profile"
+                active={activeField === "profile"} onClick={() => setActiveField("profile")} />
             </div>
           </nav>
 
           <div className="px-3 py-4 border-t border-white/10">
             <div className="text-xs mb-1 text-white/80">Logged in as</div>
-            <div className="text-sm font-medium">{user.name}</div>
+            <div className="text-sm font-medium">Hello, {user.name}</div>
           </div>
         </aside>
 
-        {/* Main content */}
+        {/* Main (Field) */}
         <div className="flex-1 flex min-w-0 flex-col">
-          {/* Header */}
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
-            <Breadcrumb active={active} />
+            <div className="text-sm text-zinc-600">
+              Field Portal <span className="mx-1">›</span>
+              <span className="font-medium text-zinc-900">
+                {labelForField(activeField)}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
               <button className="btn-ghost"><Download size={16}/> Export</button>
@@ -100,15 +117,79 @@ export default function App() {
             </div>
           </header>
 
-          {/* Page body */}
           <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-            {active === "overview" && <Overview />}
-            {active === "completion" && <Completion />}
-            {active === "predictive" && <Predictive />}
-            {active === "field" && <FieldMgmt />}
-            {active === "audit" && <AuditTrail />}
+            {activeField === "home" && <FieldHome user={user} />}
+            {activeField === "surveys" && <MySurveys user={user} />}
+            {activeField === "assignments" && <Assignments user={user} />}
+            {activeField === "uploads" && <Uploads user={user} />}
+            {activeField === "announcements" && <Announcements user={user} />}
+            {activeField === "profile" && <Profile user={user} />}
           </main>
         </div>
+      </div>
+    );
+  }
+
+  // ================= ADMIN VIEW =================
+  return (
+    <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
+      {/* Sidebar (Admin) */}
+      <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
+        <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
+          <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
+          <div>
+            <div className="text-sm font-semibold tracking-wide">EBRS Insights</div>
+            <div className="text-xs text-white/80">Admin Console</div>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
+          <SideLink icon={<Grid2X2 size={18} />} label="Overview"
+            active={active === "overview"} onClick={() => setActive("overview")} />
+          <SideLink icon={<Activity size={18} />} label="Completion"
+            active={active === "completion"} onClick={() => setActive("completion")} />
+          <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
+            active={active === "predictive"} onClick={() => setActive("predictive")} />
+          <SideLink icon={<Users size={18} />} label="Field Management"
+            active={active === "field"} onClick={() => setActive("field")} />
+          <SideLink icon={<History size={18} />} label="Audit Trail"
+            active={active === "audit"} onClick={() => setActive("audit")} />
+
+          <div className="pt-2">
+            <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
+            <SideLink icon={<Settings size={18} />} label="Settings" />
+            <SideLink icon={<UserCircle size={18} />} label="Profile"
+              active={active === "profile"} onClick={() => setActive("profile")} />
+          </div>
+        </nav>
+
+        <div className="px-3 py-4 border-t border-white/10">
+          <div className="text-xs mb-1 text-white/80">Logged in as</div>
+          <div className="text-sm font-medium">Hello, {user.name}</div>
+        </div>
+      </aside>
+
+      {/* Main (Admin) */}
+      <div className="flex-1 flex min-w-0 flex-col">
+        <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
+          <Breadcrumb active={active} />
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost"><Bell size={18} /></button>
+            <button className="btn-ghost"><Download size={16}/> Export</button>
+            <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+              <LogOut size={16}/> Logout
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+          {active === "overview" && <Overview />}
+          {active === "completion" && <Completion />}
+          {active === "predictive" && <Predictive />}
+          {active === "field" && <FieldMgmt />}
+          {active === "audit" && <AuditTrail />}
+          {active === "profile" && <AdminProfile user={user} />}
+        </main>
       </div>
     </div>
   );
@@ -127,4 +208,16 @@ function SideLink({ icon, label, active, onClick }) {
       <span className="truncate">{label}</span>
     </button>
   );
+}
+
+function labelForField(key) {
+  switch (key) {
+    case "home": return "Dashboard";
+    case "surveys": return "My Surveys";
+    case "assignments": return "Assignments";
+    case "uploads": return "Uploads";
+    case "announcements": return "Announcements";
+    case "profile": return "Profile";
+    default: return "Dashboard";
+  }
 }

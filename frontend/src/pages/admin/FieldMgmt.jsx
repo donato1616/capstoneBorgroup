@@ -1,4 +1,4 @@
-import { Card, Filter } from "../components/ui";
+import { Card, Filter } from "../../components/ui";
 
 export default function FieldMgmt() {
   return (
