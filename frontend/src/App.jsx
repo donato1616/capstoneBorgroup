@@ -82,7 +82,7 @@ export default function App() {
 
           <div className="px-3 py-4 border-t border-white/10">
             <div className="text-xs mb-1 text-white/80">Logged in as</div>
-            <div className="text-sm font-medium">Hello, {user.name}</div>
+            <div className="text-sm font-medium">{user.name}</div>
           </div>
         </aside>
 
