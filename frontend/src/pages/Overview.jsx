@@ -84,10 +84,59 @@ export default function Overview() {
           </div>
         </Card>
       </div>
-
-      {/* ===== Upload Data (bottom) ===== */}
       <UploadData />
+      <TestConnection />
     </div>
+  );
+}
+
+function TestConnection() {
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const API_BASE = import.meta.env.VITE_API_BASE || "";
+  const PING_URL = `${API_BASE}/api/ping`;
+
+  const onTest = async () => {
+    setResult(null);
+    setError(null);
+    try {
+      const res = await fetch(PING_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setResult(data);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-medium">Backend Connection Test</div>
+          <p className="text-xs text-zinc-500">Check API ↔ DB health</p>
+        </div>
+        <button
+          type="button"
+          onClick={onTest}
+          className="text-xs px-3 py-1.5 rounded-lg bg-zinc-900 text-white hover:opacity-90"
+        >
+          Ping
+        </button>
+      </div>
+
+      {result && (
+        <div className="mt-3 text-sm rounded-lg border p-2 bg-emerald-50 text-emerald-800">
+          ✅ {result.message} (studies in DB: {result.studiesCount})
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 text-sm rounded-lg border p-2 bg-rose-50 text-rose-800">
+          ❌ {error}
+        </div>
+      )}
+    </Card>
   );
 }
 
