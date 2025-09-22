@@ -1,4 +1,5 @@
 import { Card } from "../../components/ui";
+import UploadData from "../../components/UploadData";
 
 export default function DataExplorer() {
   return (
@@ -9,6 +10,9 @@ export default function DataExplorer() {
           Grid / chart placeholder (drilldown, filters)
         </div>
       </Card>
+
+      {/* Reuse the same upload widget */}
+      <UploadData />
     </div>
   );
 }
