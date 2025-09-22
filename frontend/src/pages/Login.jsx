@@ -1,25 +1,28 @@
 // src/pages/Login.jsx
-import { Shield, User, Users, Eye, EyeOff } from "lucide-react";
+import { Shield, User, Users, BarChart3, Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 
 export default function Login({ onLogin }) {
-  const [role, setRole] = useState(null); // "admin" | "field" | null
+  const [role, setRole] = useState(null); // "admin" | "field" | "analyst" | null
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [showPw, setShowPw] = useState(false);
 
   function handleSubmit(e) {
     e.preventDefault();
-    if (email && pw) {
-      const userObj = { name: role === "admin" ? "Admin" : "Field Researcher", email, role };
-      const token = `${role}-demo-token`;
-      localStorage.setItem("auth_user", JSON.stringify(userObj));
-      localStorage.setItem("auth_token", token);
-      onLogin(userObj);
-    }
+    if (!email || !pw) return;
+
+    // Store user + token (replace with real API later)
+    const display =
+      role === "admin" ? "Admin" : role === "field" ? "Field Researcher" : "Analyst";
+    const userObj = { name: display, email, role };
+    const token = `${role}-demo-token`;
+    localStorage.setItem("auth_user", JSON.stringify(userObj));
+    localStorage.setItem("auth_token", token);
+    onLogin(userObj);
   }
 
-  // STEP 1: Role selection
+  // STEP 1 — Role selection
   if (!role) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-zinc-50 p-6">
@@ -45,13 +48,27 @@ export default function Login({ onLogin }) {
             >
               <Users size={18} /> Field Researcher Login
             </button>
+            <button
+              onClick={() => setRole("analyst")}
+              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+            >
+              <BarChart3 size={18} /> Analyst Login
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // STEP 2: Role-specific login form
+  // STEP 2 — Role-specific login screen (shared form with role-based copy)
+  const roleTitle = role === "admin" ? "Admin" : role === "field" ? "Field Researcher" : "Analyst";
+  const roleSubtitle =
+    role === "admin"
+      ? "Admin Console"
+      : role === "field"
+      ? "Field Researcher Portal"
+      : "Analyst Workspace";
+
   return (
     <div className="flex h-screen w-full">
       {/* Left: brand panel */}
@@ -62,27 +79,21 @@ export default function Login({ onLogin }) {
           </div>
           <div>
             <div className="text-lg font-semibold">EBRS Insights</div>
-            <div className="text-xs text-white/80">
-              {role === "admin" ? "Admin Console" : "Field Researcher Portal"}
-            </div>
+            <div className="text-xs text-white/80">{roleSubtitle}</div>
           </div>
         </div>
         <div>
-          <h1 className="text-3xl font-semibold">
-            {role === "admin" ? "Admin Login" : "Field Researcher Login"}
-          </h1>
+          <h1 className="text-3xl font-semibold">{roleTitle} Login</h1>
           <p className="text-white/80 mt-2">
-            {role === "admin"
-              ? "Sign in to manage the dashboard"
-              : "Sign in to submit and track surveys"}
+            {role === "admin" && "Sign in to manage the dashboard"}
+            {role === "field" && "Sign in to submit and track surveys"}
+            {role === "analyst" && "Sign in to view analytics and generate reports"}
           </p>
         </div>
-        <div className="text-xs text-white/60">
-          &copy; {new Date().getFullYear()} EBRS
-        </div>
+        <div className="text-xs text-white/60">&copy; {new Date().getFullYear()} EBRS</div>
       </div>
 
-      {/* Right: login form */}
+      {/* Right: form */}
       <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
         <div className="w-full max-w-sm">
           <div className="mb-6 text-center md:hidden">
@@ -93,12 +104,8 @@ export default function Login({ onLogin }) {
           </div>
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-semibold text-zinc-900">
-              {role === "admin" ? "Admin Login" : "Field Researcher Login"}
-            </h2>
-            <p className="mt-1 text-sm text-zinc-600">
-              Use your {role} credentials
-            </p>
+            <h2 className="text-xl font-semibold text-zinc-900">{roleTitle} Login</h2>
+            <p className="mt-1 text-sm text-zinc-600">Use your {roleTitle.toLowerCase()} credentials</p>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
               <div>

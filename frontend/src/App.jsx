@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
   Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
-  Megaphone, UserCircle
+  Megaphone, UserCircle, FileText, FilePlus2, Database
 } from "lucide-react";
 
+// Login page
 import Login from "./pages/Login.jsx";
 
 // Admin pages
@@ -23,12 +24,20 @@ import Uploads from "./pages/field/Uploads.jsx";
 import Announcements from "./pages/field/Announcements.jsx";
 import Profile from "./pages/field/Profile.jsx";
 
+// Analyst pages
+import AnalystHome from "./pages/analyst/AnalystHome.jsx";
+import Reports from "./pages/analyst/Reports.jsx";
+import GenerateReports from "./pages/analyst/GenerateReports.jsx";
+import DataExplorer from "./pages/analyst/DataExplorer.jsx";
+import AnalystProfile from "./pages/analyst/Profile.jsx";
+
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
-  const [active, setActive] = useState("overview");       // admin tabs
-  const [activeField, setActiveField] = useState("home"); // field tabs
+  const [active, setActive] = useState("overview");        // admin tabs
+  const [activeField, setActiveField] = useState("home");  // field tabs
+  const [activeAnalyst, setActiveAnalyst] = useState("a_home"); // analyst tabs
 
   // initialize user from localStorage
   const [user, setUser] = useState(() => {
@@ -130,6 +139,73 @@ export default function App() {
     );
   }
 
+  // ================= ANALYST VIEW =================
+  if (user.role === "analyst") {
+    return (
+      <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
+        {/* Sidebar (Analyst) */}
+        <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
+          <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
+            <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
+            <div>
+              <div className="text-sm font-semibold tracking-wide">EBRS Insights</div>
+              <div className="text-xs text-white/80">Analyst Workspace</div>
+            </div>
+          </div>
+
+          <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
+            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard"
+              active={activeAnalyst === "a_home"} onClick={() => setActiveAnalyst("a_home")} />
+            <SideLink icon={<FileText size={18} />} label="Reports"
+              active={activeAnalyst === "a_reports"} onClick={() => setActiveAnalyst("a_reports")} />
+            <SideLink icon={<FilePlus2 size={18} />} label="Generate Reports"
+              active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
+            <SideLink icon={<Database size={18} />} label="Data Explorer"
+              active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
+
+            <div className="pt-2">
+              <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
+              <SideLink icon={<UserCircle size={18} />} label="Profile"
+                active={activeAnalyst === "a_profile"} onClick={() => setActiveAnalyst("a_profile")} />
+            </div>
+          </nav>
+
+          <div className="px-3 py-4 border-t border-white/10">
+            <div className="text-xs mb-1 text-white/80">Logged in as</div>
+            <div className="text-sm font-medium">Hello, {user.name}</div>
+          </div>
+        </aside>
+
+        {/* Main (Analyst) */}
+        <div className="flex-1 flex min-w-0 flex-col">
+          <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
+            <div className="text-sm text-zinc-600">
+              Analyst Workspace <span className="mx-1">›</span>
+              <span className="font-medium text-zinc-900">
+                {labelForAnalyst(activeAnalyst)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="btn-ghost"><Bell size={18} /></button>
+              <button className="btn-ghost"><Download size={16}/> Export</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+                <LogOut size={16}/> Logout
+              </button>
+            </div>
+          </header>
+
+          <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+            {activeAnalyst === "a_home" && <AnalystHome user={user} />}
+            {activeAnalyst === "a_reports" && <Reports />}
+            {activeAnalyst === "a_generate" && <GenerateReports />}
+            {activeAnalyst === "a_data" && <DataExplorer />}
+            {activeAnalyst === "a_profile" && <AnalystProfile user={user} />}
+          </main>
+        </div>
+      </div>
+    );
+  }
+
   // ================= ADMIN VIEW =================
   return (
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
@@ -218,6 +294,17 @@ function labelForField(key) {
     case "uploads": return "Uploads";
     case "announcements": return "Announcements";
     case "profile": return "Profile";
+    default: return "Dashboard";
+  }
+}
+
+function labelForAnalyst(key) {
+  switch (key) {
+    case "a_home": return "Dashboard";
+    case "a_reports": return "Reports";
+    case "a_generate": return "Generate Reports";
+    case "a_data": return "Data Explorer";
+    case "a_profile": return "Profile";
     default: return "Dashboard";
   }
 }
