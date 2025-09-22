@@ -43,16 +43,16 @@ export default function Login({ onLogin }) {
               <User size={18} /> Admin Login
             </button>
             <button
-              onClick={() => setRole("field")}
-              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-            >
-              <Users size={18} /> Field Researcher Login
-            </button>
-            <button
               onClick={() => setRole("analyst")}
               className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
             >
               <BarChart3 size={18} /> Analyst Login
+            </button>
+            <button
+              onClick={() => setRole("field")}
+              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+            >
+              <Users size={18} /> Field Researcher Login
             </button>
           </div>
         </div>
