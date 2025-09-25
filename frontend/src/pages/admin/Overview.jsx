@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Card, KPI, Filter } from "../components/ui";
+import { Card, KPI, Filter } from "../../components/ui";
+import UploadData from "../../components/UploadData";  // <-- NEW import
 
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
@@ -7,7 +8,6 @@ export default function Overview() {
   const [metrics, setMetrics] = useState(null);
   const [error, setError] = useState(null);
 
-  // build the URL safely (respects vite base)
   const METRICS_URL = `${import.meta.env.BASE_URL}data/clean/metrics.json`;
 
   useEffect(() => {
@@ -42,11 +42,13 @@ export default function Overview() {
         </div>
       )}
 
+      {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <Filter label="Client" /><Filter label="Project" />
         <Filter label="Survey" /><Filter label="Date Range" />
       </div>
 
+      {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPI label="Total Responses" value={fmt(total)} sub={`Last sync: ${lastSync}`} />
         <KPI label="Completion Rate" value={completion == null ? "—" : `${completion}%`} sub="Target: 85%" />
@@ -54,6 +56,7 @@ export default function Overview() {
         <KPI label="Active Researchers" value="—" sub="(coming soon)" />
       </div>
 
+      {/* Charts + Highlights */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <ChartBox title="Daily Submissions" />
         <ChartBox title="Completion Forecast" />
@@ -67,6 +70,7 @@ export default function Overview() {
         </Card>
       </div>
 
+      {/* Data Health + Survey Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="p-4">
           <div className="text-sm font-medium mb-3">Data Health Snapshot</div>
@@ -83,6 +87,11 @@ export default function Overview() {
             Dropdown / multi-select placeholder
           </div>
         </Card>
+      </div>
+
+      {/* Upload Data (bottom) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        <UploadData /> {/* <-- cleaner now, since it’s imported */}
       </div>
     </div>
   );
