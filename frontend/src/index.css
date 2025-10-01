@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { @apply bg-zinc-50 text-zinc-900 font-sans antialiased; }
+}
+
+@layer components {
+  .card { @apply bg-white border border-zinc-200 rounded-2xl shadow-card; }
+  .kpi  { @apply card p-4; }
+  .btn  { @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition; }
+  .btn-ghost { @apply btn border border-zinc-200 bg-white hover:bg-zinc-50; }
+  .btn-primary { @apply btn bg-olive-700 text-white hover:bg-olive-800; }
+  .sidebar-link { @apply w-full text-left px-3 py-2 rounded-xl text-sm text-white/90 hover:bg-white/10; }
+  .sidebar-link-active { @apply bg-white/15 text-white font-semibold; }
+  .chip { @apply inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-1 text-xs; }
+}
+
+/* Thin scrollbar */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 9999px; }
