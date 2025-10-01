@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
@@ -290,7 +291,7 @@ export default function App() {
                 <label>
                   Completed:
                   <select
-                    value={filters.isComplete === undefined ? '' : filters.isComplete}
+                    value={filters.isComplete === undefined ? '' : String(!!filters.isComplete)}
                     onChange={(e) =>
                       setFilters({
                         ...filters,
@@ -309,11 +310,11 @@ export default function App() {
                 </label>
               </div>
 
-              {/* Dataset Analytics Table */}
+              {/* Legacy dataset analytics (keep for now if you still use it) */}
               <DatasetAnalytics datasetId={selectedDataset} filters={filters} />
 
-              {/* Keep Overview component */}
-              <Overview />
+              {/* New Overview analytics bound to selectedDataset */}
+              <Overview selectedDataset={selectedDataset} />
             </div>
           )}
           {active === "completion" && <Completion />}

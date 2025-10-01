@@ -1,21 +1,28 @@
 // frontend/src/components/DatasetSelector.jsx
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 const DatasetSelector = ({ onSelectDataset }) => {
   const [datasets, setDatasets] = useState([]);
   const [selectedDataset, setSelectedDataset] = useState('');
 
   useEffect(() => {
-    // Fetch all datasets from backend
     const fetchDatasets = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/datasets');
-        console.log('Datasets fetched from backend:', response.data); // Debug log
-        if (Array.isArray(response.data) && response.data.length > 0) {
-          setDatasets(response.data);
+        const response = await fetch(`${API_BASE}/api/datasets`, {
+          credentials: 'include',  // Ensures cookies are included in the request
+        });
+
+        if (!response.ok) throw new Error('Error fetching datasets');
+        const data = await response.json();
+
+        if (Array.isArray(data) && data.length > 0) {
+          setDatasets(data);
+          setSelectedDataset(data[0].dataset_id); // Auto-select the first dataset
+          onSelectDataset(data[0].dataset_id);     // Pass it to parent
         } else {
-          console.warn('No datasets found.');
+          console.warn('No datasets found');
           setDatasets([]);
         }
       } catch (error) {
@@ -25,12 +32,12 @@ const DatasetSelector = ({ onSelectDataset }) => {
     };
 
     fetchDatasets();
-  }, []);
+  }, []); // runs only once on component mount
 
   const handleChange = (e) => {
     const datasetId = e.target.value;
     setSelectedDataset(datasetId);
-    onSelectDataset(datasetId); // Pass selected dataset ID to parent
+    onSelectDataset(datasetId);
   };
 
   return (
@@ -46,7 +53,7 @@ const DatasetSelector = ({ onSelectDataset }) => {
       >
         <option value="">-- Choose a dataset --</option>
         {datasets.map((dataset) => (
-          <option key={dataset.id} value={dataset.id}>
+          <option key={dataset.dataset_id} value={dataset.dataset_id}>
             {dataset.name}
           </option>
         ))}

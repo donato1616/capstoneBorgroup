@@ -1,48 +1,59 @@
+// frontend/src/pages/admin/Overview.jsx
 import { useEffect, useState } from "react";
 import { Card, KPI, Filter } from "../../components/ui";
-import UploadData from "../../components/UploadData";  // <-- NEW import
+import UploadData from "../../components/UploadData";
 
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
-export default function Overview() {
-  const [metrics, setMetrics] = useState(null);
-  const [error, setError] = useState(null);
-
-  const METRICS_URL = `${import.meta.env.BASE_URL}data/clean/metrics.json`;
+/**
+ * Props:
+ *   selectedDataset: string (UUID or legacy id) - REQUIRED
+ */
+export default function Overview({ selectedDataset }) {
+  const [analytics, setAnalytics] = useState({ descriptive: null, predictive: null, prescriptive: null });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
-    fetch(METRICS_URL, { cache: "no-store" })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status} for ${METRICS_URL}`);
-        return r.json();
-      })
-      .then((data) => {
-        console.log("Loaded metrics.json:", data);
-        setMetrics(data);
-        setError(null);
-      })
-      .catch((err) => {
-        console.error("Failed to load metrics.json", err);
-        setMetrics(null);
-        setError("No metrics found. Make sure metrics.json is in /public/data/clean/");
-      });
-  }, [METRICS_URL]);
+    (async () => {
+      if (!selectedDataset) {
+        setAnalytics({ descriptive: null, predictive: null, prescriptive: null });
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/datasets/${selectedDataset}/analytics`, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setAnalytics(data);
+        setErr("");
+      } catch (e) {
+        console.error("analytics load failed", e);
+        setAnalytics({ descriptive: null, predictive: null, prescriptive: null });
+        setErr("Failed to load analytics for the selected dataset.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [selectedDataset]);
 
-  const lastSync = metrics?.generated_at
-    ? new Date(metrics.generated_at).toLocaleString()
+  const kpis = analytics?.descriptive?.kpis || {};
+  const lastSync = analytics?.descriptive?.computed_at
+    ? new Date(analytics.descriptive.computed_at).toLocaleString()
     : "—";
-  const total = metrics?.rows_total ?? null;
-  const completion = metrics?.completion_rate_pct ?? null;
+  const total = kpis.rows ?? null;
+  const topRegions = Array.isArray(kpis.top_regions) ? kpis.top_regions : [];
 
   return (
     <div className="space-y-6">
-      {error && (
+      {err && (
         <div className="chip bg-amber-50 border-amber-300 text-amber-800">
-          {error}
+          {err}
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters (UI only for now) */}
       <div className="flex flex-wrap items-center gap-2">
         <Filter label="Client" /><Filter label="Project" />
         <Filter label="Survey" /><Filter label="Date Range" />
@@ -50,8 +61,8 @@ export default function Overview() {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPI label="Total Responses" value={fmt(total)} sub={`Last sync: ${lastSync}`} />
-        <KPI label="Completion Rate" value={completion == null ? "—" : `${completion}%`} sub="Target: 85%" />
+        <KPI label="Total Responses" value={loading ? "…" : fmt(total)} sub={`Last sync: ${lastSync}`} />
+        <KPI label="Completion Rate" value="—" sub="Target: 85%" />
         <KPI label="Error Rate" value="—" sub="(coming from QA checks)" />
         <KPI label="Active Researchers" value="—" sub="(coming soon)" />
       </div>
@@ -63,9 +74,9 @@ export default function Overview() {
         <Card className="p-4">
           <div className="text-sm font-medium mb-3">Key Predictive Highlights</div>
           <ul className="text-sm space-y-2 list-disc list-inside text-zinc-600">
-            <li>Top Expected Segment: Panel 1 (placeholder)</li>
-            <li>Risk: Region C low traction (placeholder)</li>
-            <li>Next Best Action: Weekend pushes in Region B (placeholder)</li>
+            <li>Top Expected Segment: (placeholder)</li>
+            <li>Risk: (placeholder)</li>
+            <li>Next Best Action: (placeholder)</li>
           </ul>
         </Card>
       </div>
@@ -82,16 +93,19 @@ export default function Overview() {
           </div>
         </Card>
         <Card className="p-4">
-          <div className="text-sm font-medium mb-3">Survey Selection</div>
-          <div className="h-24 rounded-xl border border-dashed grid place-items-center text-xs text-zinc-500">
-            Dropdown / multi-select placeholder
-          </div>
+          <div className="text-sm font-medium mb-3">Top Regions</div>
+          <ul className="text-sm space-y-1 text-zinc-700">
+            {topRegions.length === 0 && <li>—</li>}
+            {topRegions.map((r, i) => (
+              <li key={i}>{(r.region ?? "—")} — {fmt(r.cnt ?? 0)}</li>
+            ))}
+          </ul>
         </Card>
       </div>
 
       {/* Upload Data (bottom) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-        <UploadData /> {/* <-- cleaner now, since it’s imported */}
+        <UploadData />
       </div>
     </div>
   );
