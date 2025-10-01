@@ -1,0 +1,76 @@
+# Which column names mean the same thing (nicknames → standard name).
+# The script will look for any of these and use whichever it finds.
+synonyms:
+  respondent_id: # the person being interviewed
+    - respondent.id
+    - respondent_serial
+    - respondent.serial
+    - sbjnum
+    - id
+  response_id: # the response/interview id
+    - response_id
+    - interview_id
+    - caseid
+    - vase_responseid
+    - set_vase_responseid
+  survey_id:
+    - survey_id
+    - questionnaire_id
+  project_id:
+    - project_id
+    - proj_id
+  region:
+    - region
+    - area
+    - province
+    - city
+    - qregion
+    - qprovince
+    - pivotcity
+    - commissionregion
+    - dos_key_region
+  researcher_id: # the interviewer / field rep
+    - researcher_id
+    - interviewer
+    - interviewerid
+    - datacollection.interviewerid
+    - intervwrdetails_id
+    - srvyr
+  start_time:
+    - start_time
+    - start
+    - datacollection.starttime
+    - vstart
+    - stime
+  end_time:
+    - end_time
+    - finish
+    - datacollection.finishtime
+    - vend
+    - end
+  status:
+    - status
+    - complete
+    - completion_status
+    - datacollection.status
+    - status_report
+  duration_sec:
+    - duration
+    - netduration
+    - interview_length
+    - time_spent
+    - loi
+    - checkloi
+    - dosloi
+    - total_time
+    - t_loi_summary_totaltime
+
+# Some files have many sheets. Try these first (in this order).
+sheet_priority:
+  - FSR
+  - Main Sample
+  - DUMP
+  - W.Filtered
+  - TAYLOR_FW_20250704
+  - Sheet1
+# If a file has no obvious match, the script will pick the sheet with the most useful columns.
