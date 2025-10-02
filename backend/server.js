@@ -1,42 +1,32 @@
 // server.js (CommonJS, Prisma, Express)
-// ====== Imports & setup ======
+require('dotenv').config(); 
 const express = require('express');
-const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
 
 const app = express();
 const prisma = new PrismaClient();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
-// ====== CORS (dev) ======
-app.use(cors({
-  origin: 'http://localhost:5173',
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-  credentials: true
-}));
-
-// Log incoming requests and headers to verify CORS is set
+// ====== GLOBAL CORS HANDLER ======
+// Must be first to handle all requests, including OPTIONS preflight
 app.use((req, res, next) => {
-  console.log("Request headers:", req.headers);  // Log incoming request headers
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173'); // frontend URL
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+
+  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
 
-
+// ====== Middleware ======
 app.use(express.json({ limit: '10mb' }));
 
-// ====== Helper: resolve dataset UUID from UUID or legacy integer id ======
+// ====== Helper: resolve dataset UUID ======
 async function resolveDatasetUuid(idParam) {
   const idText = String(idParam || '').trim();
-
-  // UUID-like (contains dashes) → return as is
   if (idText.includes('-') && idText.length >= 36) return idText;
 
-  // Legacy integer id → look up in ops.dataset_map
   const oldId = parseInt(idText, 10);
   if (!Number.isFinite(oldId)) throw new Error('Invalid dataset id');
 
@@ -49,7 +39,7 @@ async function resolveDatasetUuid(idParam) {
 
 // ====== ROUTES ======
 
-// 1) Datasets list (for dropdown) — from ops.dataset, with badges
+// 1) Datasets list (for dropdown)
 app.get('/api/datasets', async (_req, res) => {
   try {
     const datasets = await prisma.$queryRaw`
@@ -78,11 +68,11 @@ app.get('/api/datasets', async (_req, res) => {
     res.json(datasets);
   } catch (err) {
     console.error('Error fetching datasets:', err);
-    res.status(500).json({ message: 'Error fetching datasets' });
+    res.status(500).json({ message: 'Error fetching datasets', detail: err.message });
   }
 });
 
-// 2) Audit Trail rows (flagged | clean | all)
+// 2) Dataset rows (flagged | clean | all)
 app.get('/api/datasets/:id/rows', async (req, res) => {
   try {
     const { id } = req.params;
@@ -133,17 +123,17 @@ app.get('/api/datasets/:id/rows', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('Error fetching rows:', err);
-    res.status(500).json({ message: 'Error fetching rows' });
+    res.status(500).json({ message: 'Error fetching rows', detail: err.message });
   }
 });
 
-// 3) Apply admin fixes (resolve issues, update raw JSON, upsert into clean, audit)
+// 3) Apply admin fixes / audit / upsert
 app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
   try {
     const { id, rowId } = req.params;
     const { fixes = {}, actor = 'admin', note = '' } = req.body || {};
-
     const dsUuid = await resolveDatasetUuid(id);
+
     const raw = await prisma.$queryRaw`
       select data from staging.raw_row
       where raw_row_id = ${Number(rowId)} and dataset_id = ${dsUuid}::uuid
@@ -152,17 +142,14 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
     if (!raw.length) return res.status(404).json({ message: 'Row not found' });
 
     const original = raw[0].data;
-    const updated  = { ...original, ...fixes };
+    const updated = { ...original, ...fixes };
 
-    // Mark ALL open issues for this row as resolved (simple & robust)
     await prisma.$executeRaw`
       update staging.validation_issue
       set resolved_at = now()
-      where raw_row_id = ${Number(rowId)}
-        and resolved_at is null
+      where raw_row_id = ${Number(rowId)} and resolved_at is null
     `;
 
-    // Audit per field changed
     for (const [field, newValue] of Object.entries(fixes)) {
       const oldValue = original[field] ?? null;
       await prisma.$executeRaw`
@@ -172,23 +159,20 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
       `;
     }
 
-    // Update raw JSON
     await prisma.$executeRaw`
       update staging.raw_row set data = ${updated}::jsonb
       where raw_row_id = ${Number(rowId)}
     `;
 
-    // Normalize → upsert into dwh.clean_row (delete+insert by business_key to avoid dupes)
     const business_key = String(updated.id ?? updated.response_id ?? rowId);
-    const observed_at  = updated.start_date || updated.date || null;
-    const region       = updated.region ?? null;
-    const surveyor     = (updated.interviewer_id ?? updated.surveyor ?? '') + '';
-    const is_complete  = (updated.is_complete === true || updated.is_complete === 'true') ? 1 : 0;
+    const observed_at = updated.start_date || updated.date || null;
+    const region = updated.region ?? null;
+    const surveyor = (updated.interviewer_id ?? updated.surveyor ?? '') + '';
+    const is_complete = (updated.is_complete === true || updated.is_complete === 'true') ? 1 : 0;
     const duration_sec = Number(updated.duration_sec ?? 0) || 0;
 
     await prisma.$executeRaw`
-      delete from dwh.clean_row
-      where dataset_id = ${dsUuid}::uuid and business_key = ${business_key}
+      delete from dwh.clean_row where dataset_id = ${dsUuid}::uuid and business_key = ${business_key}
     `;
 
     await prisma.$executeRaw`
@@ -204,7 +188,6 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
       )
     `;
 
-    // Final resolve note (optional)
     await prisma.$executeRaw`
       insert into ops.audit_log (dataset_id, raw_row_id, actor, action, note)
       values (${dsUuid}::uuid, ${Number(rowId)}, ${actor}, 'RESOLVE', ${note})
@@ -217,103 +200,5 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
   }
 });
 
-// 4) Analytics snapshots (descriptive/predictive/prescriptive)
-app.get('/api/datasets/:id/analytics', async (req, res) => {
-  try {
-    const dsUuid = await resolveDatasetUuid(req.params.id);
-    const [desc, pred, presc] = await Promise.all([
-      prisma.$queryRaw`select kpis, computed_at from analytics.descriptive_snapshot where dataset_id = ${dsUuid}::uuid`,
-      prisma.$queryRaw`select model_summary, forecasts, computed_at from analytics.predictive_snapshot where dataset_id = ${dsUuid}::uuid`,
-      prisma.$queryRaw`select recommendations, computed_at from analytics.prescriptive_snapshot where dataset_id = ${dsUuid}::uuid`
-    ]);
-
-    res.json({
-      descriptive: desc.length ? desc[0] : null,
-      predictive:  pred.length ? pred[0] : null,
-      prescriptive:presc.length ? presc[0] : null
-    });
-  } catch (err) {
-    console.error('Error fetching analytics:', err);
-    res.status(500).json({ message: 'Error fetching analytics' });
-  }
-});
-
-// 5) Recompute descriptive analytics (button-friendly)
-app.post('/api/datasets/:id/analytics/recompute', async (req, res) => {
-  try {
-    const dsUuid = await resolveDatasetUuid(req.params.id);
-    await prisma.$executeRaw`
-      with base as (
-        select count(*)::int as rows_cnt from dwh.clean_row where dataset_id = ${dsUuid}::uuid
-      ),
-      tr as (
-        select coalesce(jsonb_agg(x order by (x->>'cnt')::int desc), '[]'::jsonb) as regions_json
-        from (
-          select jsonb_build_object('region', region, 'cnt', count(*)) as x
-          from dwh.clean_row
-          where dataset_id = ${dsUuid}::uuid
-          group by region
-        ) s
-      )
-      insert into analytics.descriptive_snapshot (dataset_id, kpis)
-      select ${dsUuid}::uuid, jsonb_build_object('rows', b.rows_cnt, 'top_regions', tr.regions_json)
-      from base b cross join tr
-      on conflict (dataset_id) do update set kpis = excluded.kpis, computed_at = now()
-    `;
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Error recomputing analytics:', err);
-    res.status(500).json({ message: 'Error recomputing analytics' });
-  }
-});
-
-// (Optional) Keep your original analytics route for compatibility under /api/legacy/analytics/:datasetId
-app.get('/api/legacy/analytics/:datasetId', async (req, res) => {
-  const datasetId = parseInt(req.params.datasetId);
-  const { region, isComplete, startDate, endDate } = req.query;
-
-  try {
-    const dataset = await prisma.datasets.findUnique({
-      where: { id: datasetId },
-      include: {
-        responses: {
-          where: {
-            AND: [
-              region ? { region } : {},
-              isComplete !== undefined ? { isComplete: isComplete === 'true' } : {},
-              startDate ? { startDate: { gte: new Date(startDate) } } : {},
-              endDate ? { startDate: { lte: new Date(endDate) } } : {},
-            ]
-          },
-          include: { study: true, interviewer: true }
-        }
-      }
-    });
-
-    if (!dataset) return res.status(404).json({ message: 'Dataset not found' });
-
-    const sortedResponses = (dataset.responses || []).sort((a, b) => {
-      if (a.startDate < b.startDate) return -1;
-      if (a.startDate > b.startDate) return 1;
-      return (a.startHour || 0) - (b.startHour || 0);
-    });
-
-    res.json({
-      dataset: {
-        id: dataset.id,
-        name: dataset.name,
-        uploadDate: dataset.uploadDate,
-        dataType: dataset.dataType
-      },
-      responses: sortedResponses
-    });
-  } catch (err) {
-    console.error('Error fetching legacy analytics:', err);
-    res.status(500).json({ message: 'Error fetching legacy analytics' });
-  }
-});
-
 // ====== Start server ======
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
