@@ -1,24 +1,11 @@
-<<<<<<< HEAD
 // server.js (CommonJS, Prisma, Express)
-require('dotenv').config(); 
+require('dotenv').config();
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
-
-// ====== GLOBAL CORS HANDLER ======
-// Must be first to handle all requests, including OPTIONS preflight
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173'); // frontend URL
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-
-  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
-  next();
-});
 
 // ====== Middleware ======
 app.use(express.json({ limit: '10mb' }));
@@ -50,11 +37,11 @@ app.get('/api/datasets', async (_req, res) => {
         d.uploaded_at,
         d.total_rows,
         d.status,
-        coalesce(dm.data_type,'')   as data_type,
+        coalesce(dm.data_type,'') as data_type,
         coalesce(dm.file_format,'') as file_format,
-        coalesce(dm.tags,'')        as tags,
+        coalesce(dm.tags,'') as tags,
         coalesce(iss.open_issues,0) as open_issues,
-        m.old_dataset_id            as legacy_id
+        m.old_dataset_id as legacy_id
       from ops.dataset d
       left join ops.dataset_meta dm on dm.dataset_id = d.dataset_id
       left join (
@@ -203,23 +190,3 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
 
 // ====== Start server ======
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-=======
-import express from "express";
-import cors from "cors";
-
-import uploadRoute from "./api/upload.js";
-import pingRoute from "./api/ping.js";
-
-const app = express();
-
-// middlewares first
-app.use(cors());
-app.use(express.json());
-
-// then routes
-app.use("/api/upload", uploadRoute);
-app.use("/api/ping", pingRoute);
-
-const PORT = 30002;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
->>>>>>> origin/borjaBranch

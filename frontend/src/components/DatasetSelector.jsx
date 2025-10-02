@@ -13,8 +13,8 @@ const DatasetSelector = ({ onSelectDataset }) => {
         setError('');
 
         const res = await fetch(`/api/datasets`, { credentials: 'include' });
-
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
         const data = await res.json();
 
         if (Array.isArray(data) && data.length > 0) {
@@ -44,7 +44,7 @@ const DatasetSelector = ({ onSelectDataset }) => {
   };
 
   return (
-    <div>
+    <div className="dataset-selector">
       <label htmlFor="dataset-select" className="mr-2 font-medium">Select Dataset:</label>
       {loading ? (
         <span className="text-gray-500">Loading datasets...</span>
