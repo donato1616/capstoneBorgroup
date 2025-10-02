@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // server.js (CommonJS, Prisma, Express)
 require('dotenv').config(); 
 const express = require('express');
@@ -202,3 +203,23 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
 
 // ====== Start server ======
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+=======
+import express from "express";
+import cors from "cors";
+
+import uploadRoute from "./api/upload.js";
+import pingRoute from "./api/ping.js";
+
+const app = express();
+
+// middlewares first
+app.use(cors());
+app.use(express.json());
+
+// then routes
+app.use("/api/upload", uploadRoute);
+app.use("/api/ping", pingRoute);
+
+const PORT = 30002;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+>>>>>>> origin/borjaBranch
