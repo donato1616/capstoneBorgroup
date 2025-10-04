@@ -15,22 +15,23 @@ export default function Signup({ role, onBackToLogin, onBackToRoleSelection }) {
   const [showPw2, setShowPw2] = useState(false);
   const [accepted, setAccepted] = useState(false);
 
+  // Real-time mismatch flag
+  const passwordsMismatch = pw2.length > 0 && pw !== pw2;
+
   function handleSignupSubmit(e) {
     e.preventDefault();
-    if (!name || !email || !pw || !pw2 || pw !== pw2 || !accepted) return;
+    if (!name || !email || !pw || !pw2 || passwordsMismatch || !accepted) return;
 
-    // Simulate successful account creation (no auto-login)
-    // Store a one-time flash message + prefill email for the login screen
+    // Simulate account creation (no auto-login)
     localStorage.setItem("auth_flash", "Account created successfully. Please sign in to continue.");
     localStorage.setItem("signup_email", email);
 
-    // Return to the role's Login page
     onBackToLogin?.();
   }
 
   return (
     <div className="flex h-screen w-full">
-      {/* Left: brand panel (kept consistent) */}
+      {/* Left: brand panel */}
       <div className="hidden md:flex flex-col justify-between w-1/2 bg-olive-700 text-white p-10">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">
@@ -54,7 +55,7 @@ export default function Signup({ role, onBackToLogin, onBackToRoleSelection }) {
         <div className="text-xs text-white/60">&copy; {new Date().getFullYear()} EBRS</div>
       </div>
 
-      {/* Right: card form (consistent styling) */}
+      {/* Right: form card */}
       <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
         <div className="w-full max-w-sm">
           <div className="mb-6 text-center md:hidden">
@@ -118,7 +119,9 @@ export default function Signup({ role, onBackToLogin, onBackToRoleSelection }) {
                 <div className="relative">
                   <input
                     type={showPw2 ? "text" : "password"}
-                    className="w-full rounded-xl border px-3 py-2 text-sm border-zinc-300 focus:border-olive-500 pr-10"
+                    className={`w-full rounded-xl border px-3 py-2 text-sm pr-10 ${
+                      passwordsMismatch ? "border-rose-400 focus:border-rose-500" : "border-zinc-300 focus:border-olive-500"
+                    }`}
                     value={pw2}
                     onChange={(e) => setPw2(e.target.value)}
                     minLength={6}
@@ -133,6 +136,11 @@ export default function Signup({ role, onBackToLogin, onBackToRoleSelection }) {
                     {showPw2 ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
+
+                {/* Password mismatch note */}
+                {passwordsMismatch && (
+                  <p className="mt-1 text-xs text-rose-600">Passwords do not match</p>
+                )}
               </div>
 
               <label className="flex items-center gap-2 text-xs text-zinc-600">
@@ -149,7 +157,7 @@ export default function Signup({ role, onBackToLogin, onBackToRoleSelection }) {
               <button
                 type="submit"
                 className="w-full rounded-xl bg-olive-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-olive-800 disabled:opacity-50"
-                disabled={!name || !email || !pw || pw !== pw2 || !accepted}
+                disabled={!name || !email || !pw || !pw2 || passwordsMismatch || !accepted}
               >
                 <span className="inline-flex items-center gap-2">
                   <CheckCircle2 size={16} /> Create account
