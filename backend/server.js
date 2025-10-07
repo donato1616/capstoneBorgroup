@@ -188,5 +188,11 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
   }
 });
 
+const studiesRoutes = require('./routes/studies');
+const datasetRoutes = require('./routes/dataset');
+
+app.use('/api/studies', studiesRoutes);   // Handles /api/studies/:studyCode/...
+app.use('/api/dataset', datasetRoutes);   // Handles /api/dataset/:datasetId/...
+
 // ====== Start server ======
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
