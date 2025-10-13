@@ -1,3 +1,4 @@
+// frontend/src/components/UploadData.jsx
 import { useRef, useState } from "react";
 import { Card } from "./ui";
 
@@ -8,8 +9,8 @@ export default function UploadData() {
   const [status, setStatus] = useState("idle"); // idle | uploading | success | error
   const [message, setMessage] = useState("");
 
-  const API_BASE = import.meta.env.VITE_API_BASE || "";
-  const UPLOAD_URL = `${API_BASE}/api/upload`;
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+  const UPLOAD_URL = `${API_BASE}/api/dataset/upload`;
 
   const onChoose = () => inputRef.current?.click();
 
@@ -26,12 +27,12 @@ export default function UploadData() {
   };
 
   const validateAndSet = (f) => {
-    const okTypes = ["text/csv", "application/vnd.ms-excel", "application/json", "text/plain"];
-    const isCsv = f.name.toLowerCase().endsWith(".csv");
-    const isJson = f.name.toLowerCase().endsWith(".json");
-    if (!okTypes.includes(f.type) && !isCsv && !isJson) {
+    const name = f.name.toLowerCase();
+    const isCsv = name.endsWith(".csv");
+    const isXlsx = name.endsWith(".xlsx") || name.endsWith(".xls");
+    if (!isCsv && !isXlsx) {
       setStatus("error");
-      setMessage("Unsupported file type. Please upload a .csv or .json file.");
+      setMessage("Unsupported file type. Please upload a .csv or .xlsx file.");
       setFile(null);
       return;
     }
@@ -44,24 +45,21 @@ export default function UploadData() {
     if (!file) return;
     try {
       setStatus("uploading");
-      setMessage("Uploading…");
+      setMessage("Uploading and processing...");
 
       const form = new FormData();
       form.append("file", file);
+      form.append("name", file.name);
 
-      const res = await fetch(UPLOAD_URL, {
-        method: "POST",
-        body: form,
-      });
+      const res = await fetch(UPLOAD_URL, { method: "POST", body: form });
+      const data = await res.json();
 
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${txt || "Upload failed"}`);
-      }
+      if (!res.ok) throw new Error(data?.error || "Upload failed");
 
-      const data = await res.json().catch(() => ({}));
       setStatus("success");
-      setMessage(data?.message || "File uploaded successfully.");
+      setMessage(`Uploaded. Inserted facts: ${data.inserted_facts}. Issues: ${data.issues_count}.`);
+      // Store for analytics pages
+      if (data.dataset_id) localStorage.setItem("current_dataset_id", data.dataset_id);
       setFile(null);
     } catch (err) {
       console.error(err);
@@ -76,9 +74,7 @@ export default function UploadData() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-sm font-medium">Data Import</div>
-            <p className="text-xs text-zinc-500 mt-1">
-              Upload new datasets for analysis
-            </p>
+            <p className="text-xs text-zinc-500 mt-1">Upload new datasets for analysis</p>
           </div>
         </div>
 
@@ -104,7 +100,7 @@ export default function UploadData() {
             <input
               ref={inputRef}
               type="file"
-              accept=".csv,.json"
+              accept=".csv,.xlsx,.xls"
               className="hidden"
               onChange={onFilePick}
             />

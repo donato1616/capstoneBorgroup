@@ -1,26 +1,31 @@
-// server.js (CommonJS, Prisma, Express)
-require('dotenv').config(); 
+// backend/server.js (CommonJS, Prisma, Express)
+require('dotenv').config();
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
+const datasetRoute = require('./routes/dataset');
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
 
 // ====== GLOBAL CORS HANDLER ======
-// Must be first to handle all requests, including OPTIONS preflight
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173'); // frontend URL
+  res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_ORIGIN || 'http://localhost:5173');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-
-  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
 // ====== Middleware ======
 app.use(express.json({ limit: '10mb' }));
+
+// ====== Health ======
+app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// ====== New dataset routes (upload/summary/qdist/responses) ======
+app.use('/api/dataset', datasetRoute);
 
 // ====== Helper: resolve dataset UUID ======
 async function resolveDatasetUuid(idParam) {

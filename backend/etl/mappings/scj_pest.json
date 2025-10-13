@@ -1,0 +1,15 @@
+{
+    "filePatterns": ["Pest Control","SCJ","FSR"],
+    "sheetPreference": ["DUMP","FSR","PER REP"],
+    "headerRowOffset": 0,
+    "canonical": {
+      "respondentId": ["SbjNum"],
+      "interviewDate": ["Date","Upload"],
+      "region": ["Region","Area"],
+      "city": ["City"],
+      "interviewer": ["Srvyr","Interviewer"],
+      "channel": ["Mode","Channel"]
+    },
+    "dropIfAllBlank": true
+  }
+  

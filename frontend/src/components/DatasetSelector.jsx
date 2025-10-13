@@ -1,26 +1,44 @@
+
 import React, { useState, useEffect } from 'react';
 
-const DatasetSelector = ({ onSelectDataset }) => {
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+
+export default function DatasetSelector({ onSelectDataset }) {
   const [datasets, setDatasets] = useState([]);
   const [selectedDataset, setSelectedDataset] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  async function fetchJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   useEffect(() => {
-    const fetchDatasets = async () => {
+    const load = async () => {
       try {
         setLoading(true);
         setError('');
 
-        const res = await fetch(`/api/datasets`, { credentials: 'include' });
+        let data;
+        // Preferred new route
+        try {
+          data = await fetchJson(`${API_BASE}/api/dataset`);
+        } catch {
+          // Fallback to any legacy /api/datasets you still have
+          data = await fetchJson(`${API_BASE}/api/datasets`);
+        }
 
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-        const data = await res.json();
+        const norm = (Array.isArray(data) ? data : []).map(d => ({
+          dataset_id: d.dataset_id ?? d.id,
+          name: d.name ?? `Dataset ${d.dataset_id ?? d.id}`
+        })).filter(d => d.dataset_id);
 
-        if (Array.isArray(data) && data.length > 0) {
-          setDatasets(data);
-          setSelectedDataset(data[0].dataset_id);
-          onSelectDataset(data[0].dataset_id);
+        if (norm.length) {
+          setDatasets(norm);
+          setSelectedDataset(String(norm[0].dataset_id));
+          onSelectDataset(String(norm[0].dataset_id));
         } else {
           setDatasets([]);
           setError('No datasets found');
@@ -34,7 +52,7 @@ const DatasetSelector = ({ onSelectDataset }) => {
       }
     };
 
-    fetchDatasets();
+    load();
   }, [onSelectDataset]);
 
   const handleChange = (e) => {
@@ -65,6 +83,4 @@ const DatasetSelector = ({ onSelectDataset }) => {
       )}
     </div>
   );
-};
-
-export default DatasetSelector;
+}

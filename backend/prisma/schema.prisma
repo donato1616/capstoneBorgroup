@@ -24,6 +24,29 @@ model interviewers {
   responses responses[]
 }
 
+model ResponseFact {
+  id            Int      @id @default(autoincrement())
+  datasetId     Int
+  respondentId  String?  // normalized respondent id
+  interviewDate DateTime?
+  region        String?
+  city          String?
+  interviewer   String?
+  channel       String?  // F2F, Phone, Online, etc.
+
+  questionCode  String   // e.g., Q1, Q2a_1, Brand_Aware, etc.
+  answerText    String?  // original or normalized text
+  answerNum     Float?   // parsed numeric if applicable
+  rawJson       Json?    // original row or cell context
+  cleanJson     Json?    // cleaned row fields
+
+  createdAt     DateTime @default(now())
+
+  @@index([datasetId])
+  @@index([respondentId])
+  @@index([questionCode])
+}
+
 model responses {
   id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   study_id       String        @db.Uuid

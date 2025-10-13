@@ -1,0 +1,15 @@
+{
+    "filePatterns": ["FSR TAIWAN"],
+    "sheetPreference": ["Main Sample","FSR","W.Filtered"],
+    "headerRowOffset": 0,
+    "canonical": {
+      "respondentId": ["SbjNum","RespondentID"],
+      "interviewDate": ["Date","Upload"],
+      "region": ["SEC19","Region"],
+      "city": ["Q17","City"],
+      "interviewer": ["Srvyr","Interviewer"],
+      "channel": ["Channel","Mode"]
+    },
+    "dropIfAllBlank": true
+  }
+  
