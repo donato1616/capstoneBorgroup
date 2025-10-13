@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5050';
 
 export default function DatasetSelector({ onSelectDataset }) {
   const [datasets, setDatasets] = useState([]);

@@ -9,7 +9,7 @@ export default function UploadData() {
   const [status, setStatus] = useState("idle"); // idle | uploading | success | error
   const [message, setMessage] = useState("");
 
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
   const UPLOAD_URL = `${API_BASE}/api/dataset/upload`;
 
   const onChoose = () => inputRef.current?.click();

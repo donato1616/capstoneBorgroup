@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@prisma/client": "^6.16.2",
+    "cors": "^2.8.5",
     "prisma": "^6.16.2"
   }
 }

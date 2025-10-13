@@ -1,33 +1,52 @@
 // backend/server.js (CommonJS, Prisma, Express)
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
+
 const datasetRoute = require('./routes/dataset');
 
 const app = express();
 const prisma = new PrismaClient();
-const PORT = process.env.PORT || 5000;
 
-// ====== GLOBAL CORS HANDLER ======
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_ORIGIN || 'http://localhost:5173');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+// ---- Config ----
+const PORT = Number(process.env.PORT || 5050);
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 
-// ====== Middleware ======
+// Allow-list dev origins (add more if you use 127.0.0.1 or Vite preview)
+const allowedOrigins = new Set([
+  FRONTEND_ORIGIN,
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+]);
+
+// ---- CORS ----
+// NOTE: No app.options(...) needed — cors() handles preflight automatically.
+const corsOptions = {
+  origin(origin, cb) {
+    // Allow same-origin / server-to-server with no Origin header
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.has(origin)) return cb(null, true);
+    return cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+
+// ---- Body parsing ----
 app.use(express.json({ limit: '10mb' }));
 
-// ====== Health ======
+// ---- Health ----
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// ====== New dataset routes (upload/summary/qdist/responses) ======
+// ---- Routes ----
 app.use('/api/dataset', datasetRoute);
 
-// ====== Helper: resolve dataset UUID ======
+// ====== Helper: resolve dataset UUID (kept as-is) ======
 async function resolveDatasetUuid(idParam) {
   const idText = String(idParam || '').trim();
   if (idText.includes('-') && idText.length >= 36) return idText;
@@ -42,9 +61,7 @@ async function resolveDatasetUuid(idParam) {
   return rows[0].dataset_id;
 }
 
-// ====== ROUTES ======
-
-// 1) Datasets list (for dropdown)
+// ====== Legacy/extra routes (unchanged) ======
 app.get('/api/datasets', async (_req, res) => {
   try {
     const datasets = await prisma.$queryRaw`
@@ -77,7 +94,6 @@ app.get('/api/datasets', async (_req, res) => {
   }
 });
 
-// 2) Dataset rows (flagged | clean | all)
 app.get('/api/datasets/:id/rows', async (req, res) => {
   try {
     const { id } = req.params;
@@ -132,7 +148,6 @@ app.get('/api/datasets/:id/rows', async (req, res) => {
   }
 });
 
-// 3) Apply admin fixes / audit / upsert
 app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
   try {
     const { id, rowId } = req.params;
@@ -205,5 +220,8 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
   }
 });
 
-// ====== Start server ======
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+// ---- Start ----
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`CORS allowed origins: ${Array.from(allowedOrigins).join(', ')}`);
+});
