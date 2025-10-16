@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
@@ -15,6 +16,7 @@ import Predictive from "./pages/admin/Predictive.jsx";
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
 import AdminProfile from "./pages/admin/AdminProfile.jsx";
+import AdminDashboard from './pages/admin/index.jsx';
 
 // Field researcher pages
 import FieldHome from "./pages/field/FieldHome.jsx";
@@ -31,46 +33,18 @@ import GenerateReports from "./pages/analyst/GenerateReports.jsx";
 import DataExplorer from "./pages/analyst/DataExplorer.jsx";
 import AnalystProfile from "./pages/analyst/Profile.jsx";
 
+import DatasetSelector from "./components/DatasetSelector.jsx";
+import DatasetAnalytics from "./components/DatasetAnalytics.jsx";
+
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
-  // =======================
-  // ACTIVE TAB STATES (PERSISTED)
-  // =======================
-  const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");
-  const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");
-  const [activeAnalyst, setActiveAnalyst] = useState(() => localStorage.getItem("analyst_active") || "a_home");
+  const [active, setActive] = useState("overview");        // admin tabs
+  const [activeField, setActiveField] = useState("home");  // field tabs
+  const [activeAnalyst, setActiveAnalyst] = useState("a_home"); // analyst tabs
 
-  // Persist tabs for each role
-  useEffect(() => {
-    if (user?.role === "admin") localStorage.setItem("admin_active", active);
-  }, [active]);
-  useEffect(() => {
-    if (user?.role === "field") localStorage.setItem("field_active", activeField);
-  }, [activeField]);
-  useEffect(() => {
-    if (user?.role === "analyst") localStorage.setItem("analyst_active", activeAnalyst);
-  }, [activeAnalyst]);
-
-  // ===== Pre-auth view (role + mode) =====
-  const [authView, setAuthView] = useState(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem("auth_view") || "{}");
-      return { role: v?.role ?? null, mode: v?.mode ?? "login" };
-    } catch {
-      return { role: null, mode: "login" };
-    }
-  });
-  useEffect(() => {
-    localStorage.setItem("auth_view", JSON.stringify(authView));
-  }, [authView]);
-
-  const setRole = (role) => setAuthView((v) => ({ ...v, role }));
-  const setMode = (mode) => setAuthView((v) => ({ ...v, mode }));
-  const resetAuthView = () => setAuthView({ role: null, mode: "login" });
-
-  // ===== User state =====
+  // initialize user from localStorage
   const [user, setUser] = useState(() => {
     try {
       const raw = localStorage.getItem("auth_user");
@@ -80,47 +54,36 @@ export default function App() {
     }
   });
 
-  // Keep user synced
+  // keep localStorage in sync
   useEffect(() => {
     if (user) {
       localStorage.setItem("auth_user", JSON.stringify(user));
-      if (!localStorage.getItem("auth_token")) localStorage.setItem("auth_token", "demo-token");
+      if (!localStorage.getItem("auth_token")) {
+        localStorage.setItem("auth_token", "demo-token");
+      }
     } else {
       localStorage.removeItem("auth_user");
       localStorage.removeItem("auth_token");
     }
   }, [user]);
 
-  // ===== Not logged in =====
+  // ================= Dataset Selection State (Admin Overview) =================
+  const [selectedDataset, setSelectedDataset] = useState('');
+  const [filters, setFilters] = useState({ region: '', isComplete: undefined });
+
   if (!user) {
-    return (
-      <Login
-        onLogin={(u) => {
-          setUser(u);
-          localStorage.removeItem("auth_view");
-        }}
-        role={authView.role}
-        mode={authView.mode}
-        setRole={setRole}
-        setMode={setMode}
-        resetAuthView={resetAuthView}
-      />
-    );
+    return <Login onLogin={setUser} />;
   }
 
-  // ===== Logout =====
   function handleLogout() {
     setUser(null);
-    localStorage.removeItem("auth_view");
-    localStorage.removeItem("admin_active");
-    localStorage.removeItem("field_active");
-    localStorage.removeItem("analyst_active");
   }
 
   // ================= FIELD RESEARCHER VIEW =================
   if (user.role === "field") {
     return (
       <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
+        {/* Sidebar (Field) */}
         <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
           <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
             <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
@@ -154,16 +117,21 @@ export default function App() {
           </div>
         </aside>
 
+        {/* Main (Field) */}
         <div className="flex-1 flex min-w-0 flex-col">
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
             <div className="text-sm text-zinc-600">
               Field Portal <span className="mx-1">›</span>
-              <span className="font-medium text-zinc-900">{labelForField(activeField)}</span>
+              <span className="font-medium text-zinc-900">
+                {labelForField(activeField)}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
               <button className="btn-ghost"><Download size={16}/> Export</button>
-              <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16}/> Logout</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+                <LogOut size={16}/> Logout
+              </button>
             </div>
           </header>
 
@@ -184,6 +152,7 @@ export default function App() {
   if (user.role === "analyst") {
     return (
       <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
+        {/* Sidebar (Analyst) */}
         <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
           <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
             <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
@@ -202,6 +171,7 @@ export default function App() {
               active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
             <SideLink icon={<Database size={18} />} label="Data Explorer"
               active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
+
             <div className="pt-2">
               <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
               <SideLink icon={<UserCircle size={18} />} label="Profile"
@@ -215,16 +185,21 @@ export default function App() {
           </div>
         </aside>
 
+        {/* Main (Analyst) */}
         <div className="flex-1 flex min-w-0 flex-col">
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
             <div className="text-sm text-zinc-600">
               Analyst Workspace <span className="mx-1">›</span>
-              <span className="font-medium text-zinc-900">{labelForAnalyst(activeAnalyst)}</span>
+              <span className="font-medium text-zinc-900">
+                {labelForAnalyst(activeAnalyst)}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
               <button className="btn-ghost"><Download size={16}/> Export</button>
-              <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16}/> Logout</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+                <LogOut size={16}/> Logout
+              </button>
             </div>
           </header>
 
@@ -243,6 +218,7 @@ export default function App() {
   // ================= ADMIN VIEW =================
   return (
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
+      {/* Sidebar (Admin) */}
       <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
         <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
           <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
@@ -263,6 +239,7 @@ export default function App() {
             active={active === "field"} onClick={() => setActive("field")} />
           <SideLink icon={<History size={18} />} label="Audit Trail"
             active={active === "audit"} onClick={() => setActive("audit")} />
+
           <div className="pt-2">
             <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
             <SideLink icon={<Settings size={18} />} label="Settings" />
@@ -277,18 +254,69 @@ export default function App() {
         </div>
       </aside>
 
+      {/* Main (Admin) */}
       <div className="flex-1 flex min-w-0 flex-col">
         <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
           <Breadcrumb active={active} />
           <div className="flex items-center gap-2">
             <button className="btn-ghost"><Bell size={18} /></button>
             <button className="btn-ghost"><Download size={16}/> Export</button>
-            <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16}/> Logout</button>
+            <button className="btn-ghost text-rose-600" onClick={handleLogout}>
+              <LogOut size={16}/> Logout
+            </button>
           </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-          {active === "overview" && <Overview />}
+          {active === "overview" && (
+            <div>
+              {/* ================= DATASET SELECTION & FILTERING ================= */}
+              <h2 className="text-xl font-semibold mb-4">Dataset Analytics</h2>
+
+              {/* Dataset Selector */}
+              <DatasetSelector onSelectDataset={setSelectedDataset} />
+
+              {/* Filters */}
+              <div className="my-4 flex gap-4">
+                <label>
+                  Region:
+                  <input
+                    type="text"
+                    value={filters.region}
+                    onChange={(e) => setFilters({ ...filters, region: e.target.value })}
+                    className="ml-2 px-2 py-1 border rounded"
+                  />
+                </label>
+
+                <label>
+                  Completed:
+                  <select
+                    value={filters.isComplete === undefined ? '' : String(!!filters.isComplete)}
+                    onChange={(e) =>
+                      setFilters({
+                        ...filters,
+                        isComplete:
+                          e.target.value === ''
+                            ? undefined
+                            : e.target.value === 'true'
+                      })
+                    }
+                    className="ml-2 px-2 py-1 border rounded"
+                  >
+                    <option value="">All</option>
+                    <option value="true">Completed</option>
+                    <option value="false">Not Completed</option>
+                  </select>
+                </label>
+              </div>
+
+              {/* Legacy dataset analytics (keep for now if you still use it) */}
+              <DatasetAnalytics datasetId={selectedDataset} filters={filters} />
+
+              {/* New Overview analytics bound to selectedDataset */}
+              <Overview selectedDataset={selectedDataset} />
+            </div>
+          )}
           {active === "completion" && <Completion />}
           {active === "predictive" && <Predictive />}
           {active === "field" && <FieldMgmt />}

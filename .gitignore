@@ -1,0 +1,11 @@
+# Ignore all node_modules folders
+node_modules/
+
+# Ignore the build output directory for Vite (Frontend build output)
+frontend/dist/
+
+# Ignore the build output directory for the Backend (if applicable)
+backend/dist/
+
+# Ignore environment files
+.env

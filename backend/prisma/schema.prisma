@@ -4,7 +4,17 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = "postgresql://neondb_owner:npg_mbt2SVugy8jk@ep-shy-thunder-ade199gr-pooler.c-2.us-east-1.aws.neon.tech:5432/neondb?sslmode=require&channel_binding=require"
+}
+
+model datasets {
+  id          Int       @id @default(autoincrement())
+  name        String    @db.VarChar(255)
+  upload_date DateTime? @db.Date
+  status      String?   @db.VarChar(50)
+  data_type   String?   @db.VarChar(100)
+  file_format String?   @db.VarChar(50)
+  tags        String?
 }
 
 model interviewers {
@@ -14,11 +24,35 @@ model interviewers {
   responses responses[]
 }
 
+model ResponseFact {
+  id            Int      @id @default(autoincrement())
+  datasetId     Int
+  respondentId  String?  // normalized respondent id
+  interviewDate DateTime?
+  region        String?
+  city          String?
+  interviewer   String?
+  channel       String?  // F2F, Phone, Online, etc.
+
+  questionCode  String   // e.g., Q1, Q2a_1, Brand_Aware, etc.
+  answerText    String?  // original or normalized text
+  answerNum     Float?   // parsed numeric if applicable
+  rawJson       Json?    // original row or cell context
+  cleanJson     Json?    // cleaned row fields
+
+  createdAt     DateTime @default(now())
+
+  @@index([datasetId])
+  @@index([respondentId])
+  @@index([questionCode])
+}
+
 model responses {
   id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   study_id       String        @db.Uuid
   respondent_id  String?
   interviewer_id String?       @db.Uuid
+  dataset_id     Int?
   status         String?
   is_complete    Boolean       @default(false)
   duration_sec   Int?
@@ -44,3 +78,9 @@ model studies {
   created_at DateTime    @default(now()) @db.Timestamptz(6)
   responses  responses[]
 }
+
+
+
+
+
+

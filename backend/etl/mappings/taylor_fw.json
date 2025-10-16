@@ -1,0 +1,15 @@
+{
+    "filePatterns": ["TAYLOR_FW"],
+    "sheetPreference": ["TAYLOR_FW_20250704"],
+    "headerRowOffset": 0,
+    "canonical": {
+      "respondentId": ["Respondent.Serial", "Respondent_Serial"],
+      "interviewDate": ["DataCollection.FinishTime", "DataCollection_StartTime", "Date"],
+      "region": ["Region"],
+      "city": ["City"],
+      "interviewer": ["Srvyr","Interviewer"],
+      "channel": ["Mode","Channel"]
+    },
+    "dropIfAllBlank": true
+  }
+  
