@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "../../components/ui";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
 
 // --- tiny API helpers local to this file ---
 async function getAuditFacets() {

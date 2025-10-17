@@ -3,18 +3,37 @@ const dayjs = require('dayjs');
 const crypto = require('crypto');
 const { CANON, normalizeHeader, isQuestionCol: isQuestionColHeuristic } = require('./canonical');
 
-// whitelist of meta/non-question fields to exclude from pivot (normalized header names)
-const META_HEADERS = new Set([
-  'respondent_serial','respondentid','respondent_id','resp_id','sbjnum',
-  'datacollection_finishtime','datacollection_starttime','interviewdate','date','upload',
-  'region','area','city','municipality','barangay','province',
-  'srvyr','interviewer','fieldworker','interviewername',
-  'mode','channel','modeofinterview',
-  'latitude','longitude','gps_lat','gps_lng','gps_latitude','gps_longitude',
-  'starttime','endtime','duration','duration_sec','is_complete','status'
-]);
+// Build a meta-header blocklist dynamically from CANON + common admin fields.
+// We normalize every alias so we don't accidentally pivot meta fields as questions.
+const META_HEADERS = (() => {
+  const s = new Set([
+    // generic admin/meta fields
+    'datacollection_finishtime','datacollection_starttime','finish_time','start_time',
+    'interviewdate','interview_date','date','survey_date','submissiondate','submission_date',
+    'upload','created_at','updated_at',
+    'region','area','territory','zone','cluster','state','province','district',
+    'city','city_municipality','municipality','barangay',
+    'srvyr','interviewer','fieldworker','interviewername','agent','agentname','enumerator','surveyor',
+    'mode','channel','modeofinterview','interview_mode','collection_mode',
+    'latitude','longitude','gps_lat','gps_lng','gps_latitude','gps_longitude',
+    'starttime','endtime','duration','duration_sec','is_complete','status'
+  ]);
 
-// find a value by trying multiple candidate headers
+  // add all CANON aliases (normalized)
+  for (const key of Object.keys(CANON)) {
+    for (const alias of CANON[key]) s.add(normalizeHeader(alias));
+  }
+
+  // common id-ish fields
+  [
+    'respondent_serial','respondentid','respondent_id','respondent','resp_id','respid',
+    'sbjnum','recordid','record_id','uuid','uid','unique_id','imei','msisdn','mobile','phone','contact_number','id'
+  ].forEach(v => s.add(v));
+
+  return s;
+})();
+
+// find a value by trying multiple candidate headers (using normMap the loader provides)
 function pick(row, candidates, normMap) {
   if (!candidates) return undefined;
   for (const c of candidates) {
@@ -38,16 +57,16 @@ function parseNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// broadened question detector: use heuristic OR treat any non-meta text/number column as a question
+// broadened question detector: allow likely measures, block known meta
 function isQuestionCol(headerNorm) {
   if (META_HEADERS.has(headerNorm)) return false;
   if (isQuestionColHeuristic(headerNorm)) return true;
-  // treat columns that look like measures/labels as questions (e.g., 'brand_awareness','nps_score','satisfaction')
-  if (/(brand|aware|usage|attitude|satisfaction|nps|score|rating|likelihood|purchase|intend|loyalty|visit|share)/i.test(headerNorm)) {
+
+  // still allow many non-meta columns; exclude obvious admin/coordinates/identity
+  if (!/(id|uuid|imei|msisdn|name|first|last|email|phone|mobile|lat|lng|long|longitude|latitude|start|end|date|time)/i.test(headerNorm)) {
     return true;
   }
-  // generic fallback: allow if it's not obviously an ID/date/geo/meta and not empty in most rows (checked later)
-  return true;
+  return false;
 }
 
 function syntheticId(row, i) {
@@ -62,14 +81,17 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
 
   const canon = { ...CANON, ...(mapping.canonical || {}) };
 
-  // precompute normalized header -> original key map
+  // If there are no rows, bail early
+  if (!rows || !rows.length) return { facts: outFacts, issues };
+
+  // precompute normalized header -> original key map (already provided by loader)
   const normalizedToOriginal = normMap;
 
-  // If we’re using the broad fallback, we’ll skip columns that are 100% blank
+  // Evaluate headers once
   const headers = Object.keys(rows[0] || {});
   const headerNorms = headers.map(h => ({ norm: normalizeHeader(h), orig: h }));
 
-  // detect columns that are completely blank to exclude from pivot
+  // Exclude columns that are 100% blank across the file
   const nonBlankColumns = new Set();
   for (const { norm, orig } of headerNorms) {
     const any = rows.some(r => r[orig] !== '' && r[orig] !== null && r[orig] !== undefined);
@@ -86,11 +108,9 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
     const interviewer = pick(r, canon.interviewer, normalizedToOriginal);
     const channel = pick(r, canon.channel, normalizedToOriginal);
 
-    // if respondentId missing, synthesize one so we don’t drop the row
+    // synthesize respondent id if missing
     const respondentId = respondentIdRaw ? String(respondentIdRaw).trim() : syntheticId(r, i);
-    if (!respondentIdRaw) {
-      issues.push({ row: i, type: 'synthetic_respondent_id' });
-    }
+    if (!respondentIdRaw) issues.push({ row: i, type: 'synthetic_respondent_id' });
 
     const cleanRow = {
       respondentId,
@@ -101,10 +121,10 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
       channel: channel ? String(channel).trim() : null
     };
 
-    // pivot columns
+    // pivot columns → long-form facts
     for (const { norm, orig } of headerNorms) {
-      if (!nonBlankColumns.has(norm)) continue;          // skip all-blank columns
-      if (!isQuestionCol(norm)) continue;               // skip meta columns
+      if (!nonBlankColumns.has(norm)) continue;    // skip all-blank columns
+      if (!isQuestionCol(norm)) continue;          // skip meta columns
 
       const rawVal = r[orig];
       const textVal = (rawVal === '' || rawVal === undefined || rawVal === null) ? null : String(rawVal);

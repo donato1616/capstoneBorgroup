@@ -16,6 +16,25 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
+/* ---------------------------------------
+ * Helper: accept numeric id OR UUID
+ * ------------------------------------- */
+async function resolveDatasetIdFlexible(idParam) {
+  const idText = String(idParam || '').trim();
+  if (/^\d+$/.test(idText)) return Number(idText);          // numeric internal id used by ResponseFact.datasetId
+  if (idText.includes('-')) {                                // UUID → map to old numeric id
+    const rows = await prisma.$queryRaw`
+      select old_dataset_id
+      from ops.dataset_map
+      where dataset_id = ${idText}
+      limit 1
+    `;
+    if (rows.length && Number.isFinite(rows[0].old_dataset_id)) return Number(rows[0].old_dataset_id);
+    throw new Error('Unknown dataset UUID (cannot map to numeric id)');
+  }
+  throw new Error('Invalid dataset id format');
+}
+
 // ------------------------------------------------------------------
 // GET /api/dataset
 // Simple list for dropdowns (kept)
@@ -38,10 +57,10 @@ router.get('/', async (_req, res) => {
     const out = rows.map((r) => ({
       dataset_id: r.id,
       name: r.name,
-      upload_date: r.uploadDate,
+      upload_date: r.upload_date,
       status: r.status,
-      data_type: r.dataType,
-      file_format: r.fileFormat,
+      data_type: r.data_type,
+      file_format: r.file_format,
       tags: r.tags || '',
     }));
 
@@ -197,7 +216,146 @@ router.post('/upload-check', upload.single('file'), async (req, res) => {
 // ------------------------------------------------------------------
 // (Keep your other routes: /:datasetId/responses, /:id/summary, /:id/qdist)
 // ------------------------------------------------------------------
+/* ---------------------------------------
+ * GET /api/dataset/:id/summary
+ * Accepts numeric id or UUID (uses resolveDatasetIdFlexible)
+ * ------------------------------------- */
+router.get('/:id/summary', async (req, res) => {
+  try {
+    const datasetId = await resolveDatasetIdFlexible(req.params.id);
 
-// ... your existing responses/summary/qdist routes stay here ...
+    const factCount = await prisma.responseFact.count({ where: { datasetId } });
+
+    const respondents = await prisma.responseFact.findMany({
+      where: { datasetId },
+      select: { respondentId: true },
+      distinct: ['respondentId'],
+      take: 1_000_000
+    });
+    const respondentCount = respondents.length;
+
+    let byRegion = [];
+    if (factCount > 0) {
+      const regionAgg = await prisma.responseFact.groupBy({
+        by: ['region'],
+        where: { datasetId, NOT: { region: null } },
+        _count: { _all: true },
+        orderBy: { _count: { _all: 'desc' } },
+        take: 15
+      });
+      byRegion = regionAgg.map(r => ({ region: r.region, c: r._count._all }));
+    }
+
+    let topQuestions = [];
+    if (factCount > 0) {
+      const qAgg = await prisma.responseFact.groupBy({
+        by: ['questionCode'],
+        where: { datasetId },
+        _count: { _all: true },
+        orderBy: { _count: { _all: 'desc' } },
+        take: 20
+      });
+      topQuestions = qAgg.map(q => ({ question: q.questionCode, c: q._count._all }));
+    }
+
+    res.json({
+      dataset_id: datasetId,
+      respondent_count: respondentCount,
+      fact_count: factCount,
+      by_region: byRegion,
+      top_questions: topQuestions
+    });
+  } catch (err) {
+    console.error('Error building summary:', err);
+    res.status(404).json({ message: 'summary_failed', detail: err.message });
+  }
+});
+
+/* ---------------------------------------
+ * GET /api/dataset/:id/qdist?questionCode=...
+ * ------------------------------------- */
+router.get('/:id/qdist', async (req, res) => {
+  try {
+    const datasetId = await resolveDatasetIdFlexible(req.params.id);
+    const q = String(req.query.questionCode || '').trim();
+    if (!q) return res.status(400).json({ error: 'questionCode required' });
+
+    const rows = await prisma.responseFact.findMany({
+      where: { datasetId, questionCode: q },
+      select: { answerText: true, answerNum: true }
+    });
+
+    const nums = rows
+      .map(r => (r.answerNum === null || r.answerNum === undefined ? null : Number(r.answerNum)))
+      .filter(v => v !== null && Number.isFinite(v));
+
+    const bins = [];
+    if (nums.length) {
+      const min = Math.min(...nums);
+      const max = Math.max(...nums);
+      const k = 10;
+      const step = (max - min) / (k || 1) || 1;
+      for (let i = 0; i < k; i++) {
+        const lo = min + i * step;
+        const hi = i === k - 1 ? max : lo + step;
+        const cnt = nums.filter(v => v >= lo && v <= hi).length;
+        bins.push({ lo, hi, count: cnt });
+      }
+    }
+
+    const tf = {};
+    for (const r of rows) if (r.answerText) tf[r.answerText] = (tf[r.answerText] || 0) + 1;
+    const text_top = Object.entries(tf).sort((a, b) => b[1] - a[1]).slice(0, 30)
+      .map(([label, count]) => ({ label, count }));
+
+    res.json({ numeric_bins: bins, text_top });
+  } catch (err) {
+    console.error('Error building qdist:', err);
+    res.status(404).json({ message: 'qdist_failed', detail: err.message });
+  }
+});
+
+/* ---------------------------------------
+ * GET /api/dataset/:id/diagnostics
+ * ------------------------------------- */
+router.get('/:id/diagnostics', async (req, res) => {
+  try {
+    const datasetId = await resolveDatasetIdFlexible(req.params.id);
+    const factCount = await prisma.responseFact.count({ where: { datasetId } });
+
+    const byQuestion = await prisma.responseFact.groupBy({
+      by: ['questionCode'],
+      where: { datasetId },
+      _count: { _all: true },
+      orderBy: { _count: { _all: 'desc' } },
+      take: 20
+    });
+
+    const byRegion = await prisma.responseFact.groupBy({
+      by: ['region'],
+      where: { datasetId, NOT: { region: null } },
+      _count: { _all: true },
+      orderBy: { _count: { _all: 'desc' } },
+      take: 10
+    });
+
+    const sample = await prisma.responseFact.findMany({
+      where: { datasetId },
+      select: { respondentId: true, questionCode: true, region: true, answerText: true, answerNum: true },
+      take: 5
+    });
+
+    res.json({
+      dataset_id: datasetId,
+      fact_count: factCount,
+      by_question: byQuestion.map(q => ({ question: q.questionCode, count: q._count._all })),
+      by_region: byRegion.map(r => ({ region: r.region, count: r._count._all })),
+      sample
+    });
+  } catch (e) {
+    res.status(500).json({ message: 'diagnostics_failed', detail: e.message });
+  }
+});
+
 
 module.exports = router;

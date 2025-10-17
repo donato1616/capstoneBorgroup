@@ -3,47 +3,61 @@ import { useEffect, useState } from "react";
 import { Card, KPI, Filter } from "../../components/ui";
 import UploadData from "../../components/UploadData";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
 /**
  * Props:
- *   selectedDataset: string (UUID or legacy id) - REQUIRED
+ *   selectedDataset: string (UUID or numeric id) - REQUIRED
  */
 export default function Overview({ selectedDataset }) {
-  const [analytics, setAnalytics] = useState({ descriptive: null, predictive: null, prescriptive: null });
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
+    let abort = false;
+
     (async () => {
       if (!selectedDataset) {
-        setAnalytics({ descriptive: null, predictive: null, prescriptive: null });
+        setSummary(null);
+        setErr("");
         return;
       }
       setLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/api/datasets/${selectedDataset}/analytics`, { credentials: "include" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // ✅ new endpoint
+        const res = await fetch(`${API_BASE}/api/dataset/${selectedDataset}/summary`, {
+          credentials: "include",
+        });
+        if (!res.ok) throw new Error("Failed to load summary");
         const data = await res.json();
-        setAnalytics(data);
+        if (abort) return;
+        setSummary(data);
         setErr("");
       } catch (e) {
         console.error("analytics load failed", e);
-        setAnalytics({ descriptive: null, predictive: null, prescriptive: null });
-        setErr("Failed to load analytics for the selected dataset.");
+        if (!abort) {
+          setSummary(null);
+          setErr("Failed to load analytics for the selected dataset.");
+        }
       } finally {
-        setLoading(false);
+        if (!abort) setLoading(false);
       }
     })();
+
+    return () => { abort = true; };
   }, [selectedDataset]);
 
-  const kpis = analytics?.descriptive?.kpis || {};
-  const lastSync = analytics?.descriptive?.computed_at
-    ? new Date(analytics.descriptive.computed_at).toLocaleString()
-    : "—";
-  const total = kpis.rows ?? null;
-  const topRegions = Array.isArray(kpis.top_regions) ? kpis.top_regions : [];
+  // Derive KPI values from summary payload (fallbacks for empty)
+  const respondentCount = summary?.respondent_count ?? null;
+  const factCount = summary?.fact_count ?? null;
+  const lastSync = "—"; // (optional) add computed_at if you later store it server-side
+
+  // Map backend by_region [{region, c}] to your UI’s expected shape (cnt)
+  const topRegions = Array.isArray(summary?.by_region)
+    ? summary.by_region.map(r => ({ region: r.region, cnt: r.c }))
+    : [];
 
   return (
     <div className="space-y-6">
@@ -61,10 +75,10 @@ export default function Overview({ selectedDataset }) {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPI label="Total Responses" value={loading ? "…" : fmt(total)} sub={`Last sync: ${lastSync}`} />
+        <KPI label="Total Responses" value={loading ? "…" : fmt(respondentCount)} sub={`Last sync: ${lastSync}`} />
+        <KPI label="Facts Indexed" value={loading ? "…" : fmt(factCount)} sub="Long-form Q/A facts" />
         <KPI label="Completion Rate" value="—" sub="Target: 85%" />
         <KPI label="Error Rate" value="—" sub="(coming from QA checks)" />
-        <KPI label="Active Researchers" value="—" sub="(coming soon)" />
       </div>
 
       {/* Charts + Highlights */}
@@ -95,8 +109,8 @@ export default function Overview({ selectedDataset }) {
         <Card className="p-4">
           <div className="text-sm font-medium mb-3">Top Regions</div>
           <ul className="text-sm space-y-1 text-zinc-700">
-            {topRegions.length === 0 && <li>—</li>}
-            {topRegions.map((r, i) => (
+            {(!topRegions || topRegions.length === 0) && <li>—</li>}
+            {topRegions?.slice(0, 5).map((r, i) => (
               <li key={i}>{(r.region ?? "—")} — {fmt(r.cnt ?? 0)}</li>
             ))}
           </ul>
