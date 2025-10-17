@@ -40,9 +40,10 @@ import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
-  const [active, setActive] = useState("overview");        // admin tabs
-  const [activeField, setActiveField] = useState("home");  // field tabs
-  const [activeAnalyst, setActiveAnalyst] = useState("a_home"); // analyst tabs
+  // CHANGED: initialize from localStorage so refresh keeps current tab
+  const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");        // admin tabs
+  const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");  // field tabs
+  const [activeAnalyst, setActiveAnalyst] = useState(() => localStorage.getItem("analyst_active") || "a_home"); // analyst tabs
 
   // initialize user from localStorage
   const [user, setUser] = useState(() => {
@@ -67,6 +68,11 @@ export default function App() {
     }
   }, [user]);
 
+  // NEW: persist whichever tab is active so a full reload restores it
+  useEffect(() => { localStorage.setItem("admin_active", active); }, [active]);
+  useEffect(() => { localStorage.setItem("field_active", activeField); }, [activeField]);
+  useEffect(() => { localStorage.setItem("analyst_active", activeAnalyst); }, [activeAnalyst]);
+
   // ================= Dataset Selection State (Admin Overview) =================
   const [selectedDataset, setSelectedDataset] = useState('');
   const [filters, setFilters] = useState({ region: '', isComplete: undefined });
@@ -77,6 +83,10 @@ export default function App() {
 
   function handleLogout() {
     setUser(null);
+    // Optional: if you want a fresh start per login, also clear saved tabs:
+    // localStorage.removeItem("admin_active");
+    // localStorage.removeItem("field_active");
+    // localStorage.removeItem("analyst_active");
   }
 
   // ================= FIELD RESEARCHER VIEW =================
