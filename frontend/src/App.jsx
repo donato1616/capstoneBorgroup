@@ -1,9 +1,22 @@
-// frontend/src/App.jsx
 import { useEffect, useState } from "react";
 import {
-  Bell, Download, Grid2X2, Activity, LineChart, Users, History,
-  Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
-  Megaphone, UserCircle, FileText, FilePlus2, Database
+  Bell,
+  Download,
+  Grid2X2,
+  Activity,
+  LineChart,
+  Users,
+  History,
+  Settings,
+  LogOut,
+  LayoutDashboard,
+  ClipboardList,
+  Upload as UploadIcon,
+  Megaphone,
+  UserCircle,
+  FileText,
+  FilePlus2,
+  Database,
 } from "lucide-react";
 
 // Login page
@@ -16,7 +29,7 @@ import Predictive from "./pages/admin/Predictive.jsx";
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
 import AdminProfile from "./pages/admin/AdminProfile.jsx";
-import AdminDashboard from './pages/admin/index.jsx';
+import AdminDashboard from "./pages/admin/index.jsx";
 
 // Field researcher pages
 import FieldHome from "./pages/field/FieldHome.jsx";
@@ -40,12 +53,12 @@ import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
 export default function App() {
-  // CHANGED: initialize from localStorage so refresh keeps current tab
-  const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");        // admin tabs
-  const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");  // field tabs
-  const [activeAnalyst, setActiveAnalyst] = useState(() => localStorage.getItem("analyst_active") || "a_home"); // analyst tabs
+  // ====== Persistent tab states ======
+  const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");
+  const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");
+  const [activeAnalyst, setActiveAnalyst] = useState(() => localStorage.getItem("analyst_active") || "a_home");
 
-  // initialize user from localStorage
+  // ====== User ======
   const [user, setUser] = useState(() => {
     try {
       const raw = localStorage.getItem("auth_user");
@@ -55,7 +68,6 @@ export default function App() {
     }
   });
 
-  // keep localStorage in sync
   useEffect(() => {
     if (user) {
       localStorage.setItem("auth_user", JSON.stringify(user));
@@ -68,28 +80,50 @@ export default function App() {
     }
   }, [user]);
 
-  // NEW: persist whichever tab is active so a full reload restores it
+  // ====== Save active tab per role ======
   useEffect(() => { localStorage.setItem("admin_active", active); }, [active]);
   useEffect(() => { localStorage.setItem("field_active", activeField); }, [activeField]);
   useEffect(() => { localStorage.setItem("analyst_active", activeAnalyst); }, [activeAnalyst]);
 
-  // ================= Dataset Selection State (Admin Overview) =================
-  const [selectedDataset, setSelectedDataset] = useState('');
-  const [filters, setFilters] = useState({ region: '', isComplete: undefined });
+  // ====== Reload last-used or default tab when role changes ======
+  useEffect(() => {
+    if (!user) return;
 
-  if (!user) {
-    return <Login onLogin={setUser} />;
-  }
+    if (user.role === "admin") {
+      setActive(localStorage.getItem("admin_active") || "overview");
+    }
+    if (user.role === "field") {
+      setActiveField(localStorage.getItem("field_active") || "home");
+    }
+    if (user.role === "analyst") {
+      setActiveAnalyst(localStorage.getItem("analyst_active") || "a_home");
+    }
+  }, [user?.role]);
 
+  // ====== Dataset selection (Admin Overview) ======
+  const [selectedDataset, setSelectedDataset] = useState("");
+  const [filters, setFilters] = useState({ region: "", isComplete: undefined });
+
+  // ====== Logout ======
   function handleLogout() {
+    // clear saved keys
+    localStorage.removeItem("admin_active");
+    localStorage.removeItem("field_active");
+    localStorage.removeItem("analyst_active");
+    localStorage.removeItem("auth_user");
+    localStorage.removeItem("auth_token");
+
+    // 🔑 reset in-memory states so it applies immediately
+    setActive("overview");
+    setActiveField("home");
+    setActiveAnalyst("a_home");
+
     setUser(null);
-    // Optional: if you want a fresh start per login, also clear saved tabs:
-    // localStorage.removeItem("admin_active");
-    // localStorage.removeItem("field_active");
-    // localStorage.removeItem("analyst_active");
   }
 
-  // ================= FIELD RESEARCHER VIEW =================
+  if (!user) return <Login onLogin={setUser} />;
+
+  // ================= FIELD RESEARCHER =================
   if (user.role === "field") {
     return (
       <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
@@ -104,20 +138,14 @@ export default function App() {
           </div>
 
           <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard"
-              active={activeField === "home"} onClick={() => setActiveField("home")} />
-            <SideLink icon={<ClipboardList size={18} />} label="My Surveys"
-              active={activeField === "surveys"} onClick={() => setActiveField("surveys")} />
-            <SideLink icon={<Users size={18} />} label="Assignments"
-              active={activeField === "assignments"} onClick={() => setActiveField("assignments")} />
-            <SideLink icon={<UploadIcon size={18} />} label="Uploads"
-              active={activeField === "uploads"} onClick={() => setActiveField("uploads")} />
-            <SideLink icon={<Megaphone size={18} />} label="Announcements"
-              active={activeField === "announcements"} onClick={() => setActiveField("announcements")} />
+            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard" active={activeField === "home"} onClick={() => setActiveField("home")} />
+            <SideLink icon={<ClipboardList size={18} />} label="My Surveys" active={activeField === "surveys"} onClick={() => setActiveField("surveys")} />
+            <SideLink icon={<Users size={18} />} label="Assignments" active={activeField === "assignments"} onClick={() => setActiveField("assignments")} />
+            <SideLink icon={<UploadIcon size={18} />} label="Uploads" active={activeField === "uploads"} onClick={() => setActiveField("uploads")} />
+            <SideLink icon={<Megaphone size={18} />} label="Announcements" active={activeField === "announcements"} onClick={() => setActiveField("announcements")} />
             <div className="pt-2">
               <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
-              <SideLink icon={<UserCircle size={18} />} label="Profile"
-                active={activeField === "profile"} onClick={() => setActiveField("profile")} />
+              <SideLink icon={<UserCircle size={18} />} label="Profile" active={activeField === "profile"} onClick={() => setActiveField("profile")} />
             </div>
           </nav>
 
@@ -132,16 +160,12 @@ export default function App() {
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
             <div className="text-sm text-zinc-600">
               Field Portal <span className="mx-1">›</span>
-              <span className="font-medium text-zinc-900">
-                {labelForField(activeField)}
-              </span>
+              <span className="font-medium text-zinc-900">{labelForField(activeField)}</span>
             </div>
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
-              <button className="btn-ghost"><Download size={16}/> Export</button>
-              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
-                <LogOut size={16}/> Logout
-              </button>
+              <button className="btn-ghost"><Download size={16} /> Export</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
           </header>
 
@@ -158,11 +182,10 @@ export default function App() {
     );
   }
 
-  // ================= ANALYST VIEW =================
+  // ================= ANALYST =================
   if (user.role === "analyst") {
     return (
       <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
-        {/* Sidebar (Analyst) */}
         <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
           <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
             <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
@@ -173,19 +196,13 @@ export default function App() {
           </div>
 
           <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard"
-              active={activeAnalyst === "a_home"} onClick={() => setActiveAnalyst("a_home")} />
-            <SideLink icon={<FileText size={18} />} label="Reports"
-              active={activeAnalyst === "a_reports"} onClick={() => setActiveAnalyst("a_reports")} />
-            <SideLink icon={<FilePlus2 size={18} />} label="Generate Reports"
-              active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
-            <SideLink icon={<Database size={18} />} label="Data Explorer"
-              active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
-
+            <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard" active={activeAnalyst === "a_home"} onClick={() => setActiveAnalyst("a_home")} />
+            <SideLink icon={<FileText size={18} />} label="Reports" active={activeAnalyst === "a_reports"} onClick={() => setActiveAnalyst("a_reports")} />
+            <SideLink icon={<FilePlus2 size={18} />} label="Generate Reports" active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
+            <SideLink icon={<Database size={18} />} label="Data Explorer" active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
             <div className="pt-2">
               <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
-              <SideLink icon={<UserCircle size={18} />} label="Profile"
-                active={activeAnalyst === "a_profile"} onClick={() => setActiveAnalyst("a_profile")} />
+              <SideLink icon={<UserCircle size={18} />} label="Profile" active={activeAnalyst === "a_profile"} onClick={() => setActiveAnalyst("a_profile")} />
             </div>
           </nav>
 
@@ -195,21 +212,16 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main (Analyst) */}
         <div className="flex-1 flex min-w-0 flex-col">
           <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
             <div className="text-sm text-zinc-600">
               Analyst Workspace <span className="mx-1">›</span>
-              <span className="font-medium text-zinc-900">
-                {labelForAnalyst(activeAnalyst)}
-              </span>
+              <span className="font-medium text-zinc-900">{labelForAnalyst(activeAnalyst)}</span>
             </div>
             <div className="flex items-center gap-2">
               <button className="btn-ghost"><Bell size={18} /></button>
-              <button className="btn-ghost"><Download size={16}/> Export</button>
-              <button className="btn-ghost text-rose-600" onClick={handleLogout}>
-                <LogOut size={16}/> Logout
-              </button>
+              <button className="btn-ghost"><Download size={16} /> Export</button>
+              <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
           </header>
 
@@ -225,10 +237,9 @@ export default function App() {
     );
   }
 
-  // ================= ADMIN VIEW =================
+  // ================= ADMIN =================
   return (
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900">
-      {/* Sidebar (Admin) */}
       <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200 bg-olive-700 text-white">
         <div className="px-4 py-4 flex items-center gap-3 border-b border-white/10">
           <div className="h-9 w-9 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
@@ -239,22 +250,15 @@ export default function App() {
         </div>
 
         <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-          <SideLink icon={<Grid2X2 size={18} />} label="Overview"
-            active={active === "overview"} onClick={() => setActive("overview")} />
-          <SideLink icon={<Activity size={18} />} label="Completion"
-            active={active === "completion"} onClick={() => setActive("completion")} />
-          <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
-            active={active === "predictive"} onClick={() => setActive("predictive")} />
-          <SideLink icon={<Users size={18} />} label="Field Management"
-            active={active === "field"} onClick={() => setActive("field")} />
-          <SideLink icon={<History size={18} />} label="Audit Trail"
-            active={active === "audit"} onClick={() => setActive("audit")} />
-
+          <SideLink icon={<Grid2X2 size={18} />} label="Overview" active={active === "overview"} onClick={() => setActive("overview")} />
+          <SideLink icon={<Activity size={18} />} label="Completion" active={active === "completion"} onClick={() => setActive("completion")} />
+          <SideLink icon={<LineChart size={18} />} label="Predictive Insights" active={active === "predictive"} onClick={() => setActive("predictive")} />
+          <SideLink icon={<Users size={18} />} label="Field Management" active={active === "field"} onClick={() => setActive("field")} />
+          <SideLink icon={<History size={18} />} label="Audit Trail" active={active === "audit"} onClick={() => setActive("audit")} />
           <div className="pt-2">
             <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
             <SideLink icon={<Settings size={18} />} label="Settings" />
-            <SideLink icon={<UserCircle size={18} />} label="Profile"
-              active={active === "profile"} onClick={() => setActive("profile")} />
+            <SideLink icon={<UserCircle size={18} />} label="Profile" active={active === "profile"} onClick={() => setActive("profile")} />
           </div>
         </nav>
 
@@ -264,51 +268,34 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main (Admin) */}
       <div className="flex-1 flex min-w-0 flex-col">
         <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
           <Breadcrumb active={active} />
           <div className="flex items-center gap-2">
             <button className="btn-ghost"><Bell size={18} /></button>
-            <button className="btn-ghost"><Download size={16}/> Export</button>
-            <button className="btn-ghost text-rose-600" onClick={handleLogout}>
-              <LogOut size={16}/> Logout
-            </button>
+            <button className="btn-ghost"><Download size={16} /> Export</button>
+            <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
           </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {active === "overview" && (
             <div>
-              {/* ================= DATASET SELECTION & FILTERING ================= */}
               <h2 className="text-xl font-semibold mb-4">Dataset Analytics</h2>
-
-              {/* Dataset Selector */}
               <DatasetSelector onSelectDataset={setSelectedDataset} />
-
-              {/* Filters */}
               <div className="my-4 flex gap-4">
                 <label>
                   Region:
-                  <input
-                    type="text"
-                    value={filters.region}
-                    onChange={(e) => setFilters({ ...filters, region: e.target.value })}
-                    className="ml-2 px-2 py-1 border rounded"
-                  />
+                  <input type="text" value={filters.region} onChange={(e) => setFilters({ ...filters, region: e.target.value })} className="ml-2 px-2 py-1 border rounded" />
                 </label>
-
                 <label>
                   Completed:
                   <select
-                    value={filters.isComplete === undefined ? '' : String(!!filters.isComplete)}
+                    value={filters.isComplete === undefined ? "" : String(!!filters.isComplete)}
                     onChange={(e) =>
                       setFilters({
                         ...filters,
-                        isComplete:
-                          e.target.value === ''
-                            ? undefined
-                            : e.target.value === 'true'
+                        isComplete: e.target.value === "" ? undefined : e.target.value === "true",
                       })
                     }
                     className="ml-2 px-2 py-1 border rounded"
@@ -319,11 +306,7 @@ export default function App() {
                   </select>
                 </label>
               </div>
-
-              {/* Legacy dataset analytics (keep for now if you still use it) */}
               <DatasetAnalytics datasetId={selectedDataset} filters={filters} />
-
-              {/* New Overview analytics bound to selectedDataset */}
               <Overview selectedDataset={selectedDataset} />
             </div>
           )}
@@ -344,7 +327,7 @@ function SideLink({ icon, label, active, onClick }) {
       onClick={onClick}
       className={[
         "w-full text-left px-3 py-2 rounded-xl text-sm text-white/90 hover:bg-white/10",
-        active ? "bg-white/15 text-white font-semibold" : ""
+        active ? "bg-white/15 text-white font-semibold" : "",
       ].join(" ")}
     >
       <span className="mr-3 inline-grid place-items-center">{icon}</span>
