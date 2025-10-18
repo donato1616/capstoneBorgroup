@@ -25,10 +25,10 @@ const CANON = {
   
     region: [
       // your originals
-      "Region", "REGION", "Area",
+      "Region", "REGION", "Area", "SEC14b", "QRegion",
       // alternates
       "Territory", "Zone", "Cluster", "State", "Province", "District",
-      "City", "City/Municipality", "Municipality", "Barangay"
+      "City", "City/Municipality", "Municipality", "Barangay", "QProvince"
     ],
   
     city: [

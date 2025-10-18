@@ -57,10 +57,13 @@ export default function UploadData() {
       if (!res.ok) throw new Error(data?.error || "Upload failed");
 
       setStatus("success");
-      setMessage(`Uploaded. Inserted facts: ${data.inserted_facts}. Issues: ${data.issues_count}.`);
-      // Store for analytics pages
-      if (data.dataset_id) localStorage.setItem("current_dataset_id", data.dataset_id);
-      setFile(null);
+        setMessage(`Uploaded. Inserted facts: ${data.inserted_facts}. Issues: ${data.issues_count}.`);
+        if (data?.dataset_id) {
+          localStorage.setItem("current_dataset_id", String(data.dataset_id));
+          // let others (DatasetSelector / Overview) know about the new dataset
+          window.dispatchEvent(new CustomEvent('dataset:uploaded', { detail: { id: String(data.dataset_id) } }));
+        }
+        setFile(null);
     } catch (err) {
       console.error(err);
       setStatus("error");
