@@ -5,6 +5,8 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 
 import datasetRoute from "./routes/dataset.js";
+import fieldRouter from "./routes/field.js";
+app.use("/api/field", fieldRouter);
 
 dotenv.config();
 
