@@ -3,6 +3,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
+const auditRoute = require('./routes/audit');
+
 
 const datasetRoute = require('./routes/dataset');
 
@@ -36,6 +38,9 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
+
+// ---- Audit Trail ----
+app.use('/api/audit', auditRoute);
 
 // ---- Body parsing ----
 app.use(express.json({ limit: '10mb' }));

@@ -9,7 +9,7 @@ const { consolidateRows } = require('../etl/transform');
 
 const prisma = new PrismaClient();
 
-// Multer in-memory so req.file.buffer is available
+// Multer memory storage (so req.file.buffer exists)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -18,33 +18,22 @@ const upload = multer({
 // ----------------------------
 // Helpers
 // ----------------------------
-function parseId(reqParam) {
-  const n = Number(String(reqParam || '').trim());
-  if (!Number.isFinite(n)) throw new Error('Invalid dataset id');
-  return n;
+function numId(v) {
+  const n = Number(String(v ?? '').trim());
+  return Number.isFinite(n) ? n : null;
 }
 
 // ----------------------------
-// GET /api/dataset  (list for dropdown, defensive)
+// GET /api/dataset  (list for dropdowns)
 // ----------------------------
 router.get('/', async (_req, res) => {
   try {
-    // Raw SQL avoids Prisma field-mapping mistakes
     const rows = await prisma.$queryRawUnsafe(`
-      select
-        id,
-        name,
-        upload_date,
-        status,
-        data_type,
-        file_format,
-        coalesce(tags,'') as tags
-      from datasets
-      order by upload_date desc nulls last, id desc
+      SELECT id, name, upload_date, status, data_type, file_format, COALESCE(tags,'') AS tags
+      FROM datasets
+      ORDER BY upload_date DESC NULLS LAST, id DESC
     `);
-
-    // Normalize to the shape the frontend expects
-    const out = (rows || []).map(r => ({
+    const out = (rows||[]).map(r => ({
       dataset_id: r.id,
       name: r.name,
       upload_date: r.upload_date,
@@ -53,45 +42,37 @@ router.get('/', async (_req, res) => {
       file_format: r.file_format,
       tags: r.tags || ''
     }));
-
     res.json(out);
   } catch (e) {
     console.error('dataset_list_failed:', e);
-    res.status(500).json({
-      message: 'dataset_list_failed',
-      detail: e?.message || String(e)
-    });
+    res.status(500).json({ message: 'dataset_list_failed', detail: e.message });
   }
 });
 
-// Optional: tiny debug to confirm DB connectivity & row count
+// tiny health
 router.get('/_health', async (_req, res) => {
   try {
-    const c = await prisma.$queryRawUnsafe(`select count(*)::int as c from datasets`);
+    const c = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS c FROM datasets`);
     res.json({ ok: true, datasets: c?.[0]?.c ?? 0 });
   } catch (e) {
     res.status(500).json({ ok: false, detail: e.message });
   }
 });
 
-
 // ----------------------------
 // POST /api/dataset/upload
 // ----------------------------
 router.post('/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ error: 'No file uploaded / no buffer' });
-    }
+    if (!req.file?.buffer) return res.status(400).json({ error: 'No file uploaded / no buffer' });
+
     const fname = req.file.originalname || 'upload';
     const lower = fname.toLowerCase();
     const isCsv = lower.endsWith('.csv');
     const isXlsx = lower.endsWith('.xlsx') || lower.endsWith('.xls');
-    if (!isCsv && !isXlsx) {
-      return res.status(400).json({ error: 'Only .csv or .xlsx/.xls allowed' });
-    }
+    if (!isCsv && !isXlsx) return res.status(400).json({ error: 'Only .csv or .xlsx/.xls allowed' });
 
-    // 1) header row
+    // 1) header
     const ds = await prisma.datasets.create({
       data: {
         name: req.body?.name || fname,
@@ -105,25 +86,27 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
     // 2) parse
     let rows, sheetName, normMap;
-    const mapping = chooseMapping(fname);
     try {
+      const mapping = chooseMapping(fname);
       const r = readBestSheet(req.file.buffer, fname, mapping);
       rows = r.rows; sheetName = r.sheetName; normMap = r.normMap;
     } catch (e) {
+      console.error('parse_failed:', e);
       return res.status(400).json({ error: 'Failed to parse file', detail: e.message });
     }
     if (!rows?.length) return res.status(400).json({ error: 'No data rows detected' });
 
-    // 3) transform → facts
+    // 3) transform
     let facts = [], issues = [];
     try {
       const out = consolidateRows(rows, {}, normMap);
       facts = out.facts || []; issues = out.issues || [];
     } catch (e) {
+      console.error('transform_failed:', e);
       return res.status(500).json({ error: 'Transform failed', detail: e.message });
     }
 
-    // 4) bulk insert
+    // 4) bulk insert to "ResponseFact"
     try {
       const CHUNK = 1000;
       for (let i = 0; i < facts.length; i += CHUNK) {
@@ -147,7 +130,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         });
       }
     } catch (e) {
-      console.error('createMany failed', e);
+      console.error('createMany_failed:', e);
       return res.status(500).json({ error: 'Database insert failed', detail: e.message });
     }
 
@@ -160,30 +143,32 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       file_info: { name: fname, size_bytes: req.file.size, mimetype: req.file.mimetype },
     });
   } catch (e) {
-    console.error('upload failed', e);
+    console.error('upload_failed:', e);
     res.status(500).json({ error: 'Upload/ETL failed', detail: e.message });
   }
 });
 
 // ----------------------------
-// GET /api/dataset/:id/summary
+// GET /api/dataset/:id/summary   (never 404 on a valid id; returns zeros)
 // ----------------------------
 router.get('/:id/summary', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ message: 'invalid_id' });
+
   try {
-    const id = parseId(req.params.id);
+    const [{ fc }] = await prisma.$queryRawUnsafe(`
+      SELECT COUNT(*)::int AS fc FROM "ResponseFact" WHERE "datasetId" = $1
+    `, id);
 
-    const factCount = await prisma.responseFact.count({ where: { datasetId: id } });
-
-    const respondents = await prisma.responseFact.findMany({
-      where: { datasetId: id },
-      select: { respondentId: true },
-      distinct: ['respondentId'],
-    });
+    const [{ rc }] = await prisma.$queryRawUnsafe(`
+      SELECT COUNT(DISTINCT "respondentId")::int AS rc FROM "ResponseFact" WHERE "datasetId" = $1
+    `, id);
 
     const byRegion = await prisma.$queryRawUnsafe(`
-      SELECT region, COUNT(*)::int AS c
+      SELECT COALESCE(NULLIF(TRIM(region),''),'Unspecified') AS region,
+             COUNT(*)::int AS c
       FROM "ResponseFact"
-      WHERE "datasetId" = $1 AND region IS NOT NULL
+      WHERE "datasetId" = $1
       GROUP BY region
       ORDER BY c DESC
       LIMIT 15
@@ -195,34 +180,39 @@ router.get('/:id/summary', async (req, res) => {
       WHERE "datasetId" = $1
       GROUP BY "questionCode"
       ORDER BY c DESC
-      LIMIT 20
+      LIMIT 30
     `, id);
 
     res.json({
       dataset_id: id,
-      respondent_count: respondents.length,
-      fact_count: factCount,
+      respondent_count: rc ?? 0,
+      fact_count: fc ?? 0,
       by_region: byRegion || [],
       top_questions: topQuestions || [],
     });
   } catch (e) {
-    res.status(400).json({ message: 'summary_failed', detail: e.message });
+    console.error('summary_failed:', e);
+    // Return an empty but valid structure so the UI doesn't error
+    res.json({
+      dataset_id: id, respondent_count: 0, fact_count: 0, by_region: [], top_questions: []
+    });
   }
 });
 
 // ----------------------------
-// GET /api/dataset/:id/qdist?questionCode=Q17
+// GET /api/dataset/:id/qdist?questionCode=Qxx
 // ----------------------------
 router.get('/:id/qdist', async (req, res) => {
-  try {
-    const id = parseId(req.params.id);
-    const q = String(req.query.questionCode || '').trim();
-    if (!q) return res.status(400).json({ error: 'questionCode required' });
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid_id' });
+  const q = String(req.query.questionCode || '').trim();
+  if (!q) return res.status(400).json({ error: 'questionCode required' });
 
+  try {
     const rows = await prisma.responseFact.findMany({
       where: { datasetId: id, questionCode: q },
       select: { answerText: true, answerNum: true },
-      take: 50000,
+      take: 100000,
     });
 
     const nums = rows.map(r => r.answerNum).filter(v => v !== null && v !== undefined).map(Number);
@@ -235,17 +225,19 @@ router.get('/:id/qdist', async (req, res) => {
       for (let i = 0; i < k; i++) {
         const lo = min + i * step;
         const hi = i === k - 1 ? max : lo + step;
-        const cnt = nums.filter(v => v >= lo && v <= hi).length;
+        const cnt = nums.filter(v => (i===k-1 ? (v >= lo && v <= hi) : (v >= lo && v < hi))).length;
         bins.push({ lo, hi, count: cnt });
       }
     }
     const tf = {};
-    texts.forEach(t => tf[t] = (tf[t] || 0) + 1);
-    const text_top = Object.entries(tf).sort((a,b)=>b[1]-a[1]).slice(0,30).map(([label,count])=>({label, count}));
+    texts.forEach(t => { tf[t] = (tf[t] || 0) + 1; });
+    const text_top = Object.entries(tf).sort((a,b)=>b[1]-a[1]).slice(0,30)
+                        .map(([label,count])=>({label, count}));
 
     res.json({ numeric_bins: bins, text_top });
   } catch (e) {
-    res.status(400).json({ message: 'qdist_failed', detail: e.message });
+    console.error('qdist_failed:', e);
+    res.json({ numeric_bins: [], text_top: [] });
   }
 });
 
@@ -253,21 +245,146 @@ router.get('/:id/qdist', async (req, res) => {
 // GET /api/dataset/:id/series   (daily submissions)
 // ----------------------------
 router.get('/:id/series', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ message: 'invalid_id' });
+
   try {
-    const id = parseId(req.params.id);
     const series = await prisma.$queryRawUnsafe(`
-      select
-        date_trunc('day', "interviewDate")::date as day,
-        count(distinct "respondentId")::int as respondents,
-        count(*)::int as facts
-      from "ResponseFact"
-      where "datasetId" = $1 and "interviewDate" is not null
-      group by 1
-      order by 1
+      SELECT DATE("interviewDate") AS day,
+             COUNT(DISTINCT "respondentId")::int AS respondents,
+             COUNT(*)::int AS facts
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1 AND "interviewDate" IS NOT NULL
+      GROUP BY day
+      ORDER BY day
     `, id);
     res.json({ daily: series || [] });
   } catch (e) {
-    res.status(400).json({ message: 'series_failed', detail: e.message });
+    console.error('series_failed:', e);
+    res.json({ daily: [] });
+  }
+});
+
+// ----------------------------
+// COMPLETION (distinct respondents)
+// ----------------------------
+router.get('/:id/completion/daily', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid_id' });
+
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT DATE("interviewDate") AS d,
+             COUNT(DISTINCT "respondentId")::int AS cnt
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1 AND "interviewDate" IS NOT NULL
+      GROUP BY d
+      ORDER BY d
+    `, id);
+    res.json({ items: rows || [] });
+  } catch (e) {
+    console.error('completion_daily_failed:', e);
+    res.json({ items: [] });
+  }
+});
+
+router.get('/:id/completion/by-region', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid_id' });
+
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT COALESCE(NULLIF(TRIM(region),''),'Unspecified') AS region,
+             COUNT(DISTINCT "respondentId")::int AS cnt
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1
+      GROUP BY region
+      ORDER BY cnt DESC
+      LIMIT 20
+    `, id);
+    res.json({ items: rows || [] });
+  } catch (e) {
+    console.error('completion_by_region_failed:', e);
+    res.json({ items: [] });
+  }
+});
+
+router.get('/:id/completion/by-interviewer', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid_id' });
+
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT COALESCE(NULLIF(TRIM(interviewer),''),'Unspecified') AS interviewer,
+             COUNT(DISTINCT "respondentId")::int AS cnt
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1
+      GROUP BY interviewer
+      ORDER BY cnt DESC
+      LIMIT 20
+    `, id);
+    res.json({ items: rows || [] });
+  } catch (e) {
+    console.error('completion_by_interviewer_failed:', e);
+    res.json({ items: [] });
+  }
+});
+
+// ----------------------------
+// PREDICTIVE (baseline regression + horizon)
+// ----------------------------
+function linearFit(points) {
+  const n = points.length;
+  if (n < 2) return { a: 0, b: points[0]?.y || 0, r2: 0, mse: 0, mape: null, yhat: points.map(p=>p.y) };
+  const sum = (f) => points.reduce((s,p)=>s + f(p), 0);
+  const sx = sum(p=>p.x), sy = sum(p=>p.y);
+  const sxx = sum(p=>p.x*p.x), sxy = sum(p=>p.x*p.y);
+  const denom = (n * sxx - sx*sx) || 1;
+  const a = (n * sxy - sx*sy) / denom;
+  const b = (sy - a*sx) / n;
+  const yhat = points.map(p => a*p.x + b);
+  const ybar = sy / n;
+  const ssRes = points.reduce((s,p,i)=>s + Math.pow(p.y - yhat[i], 2), 0);
+  const ssTot = points.reduce((s,p)=>s + Math.pow(p.y - ybar, 2), 0) || 1;
+  const mse  = ssRes / n;
+  const r2   = 1 - (ssRes / ssTot);
+  const ape = points.filter((p,i)=>p.y !== 0).map((p,i)=>Math.abs((p.y - yhat[i]) / p.y));
+  const mape = ape.length ? (ape.reduce((s,v)=>s+v,0) / ape.length) : null;
+  return { a, b, r2, mse, mape, yhat };
+}
+
+router.get('/:id/forecast', async (req, res) => {
+  const id = numId(req.params.id);
+  if (id == null) return res.status(400).json({ message: 'invalid_id' });
+
+  try {
+    const daily = await prisma.$queryRawUnsafe(`
+      SELECT DATE("interviewDate") AS day,
+             COUNT(DISTINCT "respondentId")::int AS cnt
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1 AND "interviewDate" IS NOT NULL
+      GROUP BY day
+      ORDER BY day
+    `, id);
+
+    const pts = (daily||[]).map((r, i) => ({ x: i, y: Number(r.cnt || 0) }));
+    const fit = linearFit(pts);
+
+    // 7-day projection (carry last day if no trend)
+    const lastDate = daily?.[daily.length-1]?.day
+      ? new Date(daily[daily.length-1].day) : new Date();
+    const lastX = pts.length ? pts[pts.length - 1].x : 0;
+    const horizon = Array.from({length:7}, (_,k) => {
+      const d = new Date(lastDate); d.setDate(d.getDate() + (k+1));
+      const x = lastX + k + 1;
+      const y = pts.length ? (fit.a * x + fit.b) : 0;
+      return { date: d.toISOString().slice(0,10), projected: Math.max(0, Math.round(y)) };
+    });
+
+    res.json({ dataset_id: id, metrics: { r2: fit.r2, mse: fit.mse, mape: fit.mape }, horizon });
+  } catch (e) {
+    console.error('forecast_failed:', e);
+    res.json({ dataset_id: id, metrics: { r2: 0, mse: 0, mape: null }, horizon: [] });
   }
 });
 
