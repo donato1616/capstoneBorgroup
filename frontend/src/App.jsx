@@ -257,7 +257,6 @@ export default function App() {
           <SideLink icon={<History size={18} />} label="Audit Trail" active={active === "audit"} onClick={() => setActive("audit")} />
           <div className="pt-2">
             <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
-            <SideLink icon={<Settings size={18} />} label="Settings" />
             <SideLink icon={<UserCircle size={18} />} label="Profile" active={active === "profile"} onClick={() => setActive("profile")} />
           </div>
         </nav>
