@@ -1,27 +1,31 @@
-// Simple reusable time-series line (Recharts)
-import React from "react";
-import {
-  ResponsiveContainer, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip
-} from "recharts";
+// LineTimeseries.jsx
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 
-export default function LineTimeseries({
-  data = [],               // [{date:'YYYY-MM-DD', value: Number}]
-  xKey = "date",
-  yKey = "value",
-  height = 260,
-  yLabel = ""
-}) {
-  const fmtX = (v) => v ? String(v).slice(5) : "";
+export default function LineTimeseries({ series = [], height = 260 }) {
+  // series: [{name:'Actual', data:[{date:'2025-10-18', value:12}, ...]}, {name:'Forecast', data:[...]}]
+  // Flatten to a wide format by date
+  const allDates = Array.from(new Set(series.flatMap(s => s.data.map(d => d.date)))).sort();
+  const rows = allDates.map(date => {
+    const obj = { date };
+    series.forEach(s => {
+      const hit = s.data.find(d => d.date === date);
+      obj[s.name] = hit ? hit.value : null;
+    });
+    return obj;
+  });
+
   return (
-    <div style={{width:"100%", height}}>
+    <div style={{ width: "100%", height }}>
       <ResponsiveContainer>
-        <LineChart data={data}>
+        <LineChart data={rows} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} tickFormatter={fmtX} />
-          <YAxis label={yLabel ? { value: yLabel, angle: -90, position: 'insideLeft'} : null}/>
+          <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+          <YAxis allowDecimals={false} />
           <Tooltip />
-          <Line type="monotone" dataKey={yKey} dot={false} strokeWidth={2} />
+          <Legend />
+          {series.map((s, i) => (
+            <Line key={s.name} type="monotone" dataKey={s.name} dot={false} strokeWidth={2} />
+          ))}
         </LineChart>
       </ResponsiveContainer>
     </div>
