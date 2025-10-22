@@ -25,26 +25,26 @@ model interviewers {
 }
 
 model ResponseFact {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   datasetId     Int
-  respondentId  String?  // normalized respondent id
+  respondentId  String?
   interviewDate DateTime?
   region        String?
   city          String?
   interviewer   String?
-  channel       String?  // F2F, Phone, Online, etc.
-
-  questionCode  String   // e.g., Q1, Q2a_1, Brand_Aware, etc.
-  answerText    String?  // original or normalized text
-  answerNum     Float?   // parsed numeric if applicable
-  rawJson       Json?    // original row or cell context
-  cleanJson     Json?    // cleaned row fields
-
-  createdAt     DateTime @default(now())
+  channel       String?
+  questionCode  String
+  answerText    String?
+  answerNum     Float?
+  rawJson       Json?
+  cleanJson     Json?
+  createdAt     DateTime  @default(now())
 
   @@index([datasetId])
   @@index([respondentId])
   @@index([questionCode])
+  @@index([datasetId, interviewDate], map: "idx_responsefact_dataset_interview")
+  @@index([datasetId, respondentId], map: "idx_responsefact_dataset_resp")
 }
 
 model responses {
@@ -52,7 +52,6 @@ model responses {
   study_id       String        @db.Uuid
   respondent_id  String?
   interviewer_id String?       @db.Uuid
-  dataset_id     Int?
   status         String?
   is_complete    Boolean       @default(false)
   duration_sec   Int?
@@ -63,6 +62,7 @@ model responses {
   region         String?
   source_file    String
   created_at     DateTime      @default(now()) @db.Timestamptz(6)
+  dataset_id     Int?
   interviewers   interviewers? @relation(fields: [interviewer_id], references: [id], onUpdate: NoAction)
   studies        studies       @relation(fields: [study_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -78,9 +78,3 @@ model studies {
   created_at DateTime    @default(now()) @db.Timestamptz(6)
   responses  responses[]
 }
-
-
-
-
-
-

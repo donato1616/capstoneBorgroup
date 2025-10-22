@@ -85,29 +85,40 @@ export default function FieldMgmt() {
     closeEdit();
   };
 
-  const addResearcher = () => {
-    const payload = {
-      ...newR,
-      name: newR.name.trim(),
-      email: newR.email.trim(),
-      assignedProjects: Number(newR.assignedProjects),
-    };
+const addResearcher = async () => {
+  const payload = {
+    name: newR.name.trim(),
+    email: newR.email.trim(),
+    role: newR.role,
+    status: newR.status,
+  };
 
-    if (!payload.name) return alert("Name is required.");
-    if (!payload.email) return alert("Email is required.");
-    if (!validateEmail(payload.email)) return alert("Please enter a valid email.");
-    if (!ROLES.find((r) => r.value === payload.role)) return alert("Invalid role.");
-    if (!STATUSES.includes(payload.status)) return alert("Invalid status.");
-    if (Number.isNaN(payload.assignedProjects) || payload.assignedProjects < 0)
-      return alert("Assigned projects must be a non-negative number.");
-    if (researchers.some((r) => r.email.toLowerCase() === payload.email.toLowerCase()))
-      return alert("A researcher with this email already exists.");
+  if (!payload.name) return alert("Name is required.");
+  if (!payload.email) return alert("Email is required.");
+  if (!validateEmail(payload.email)) return alert("Please enter a valid email.");
 
-    const created = { id: nextId(), ...payload };
-    setAndSave((prev) => [created, ...prev]); // add to top
+  try {
+    const res = await fetch("/api/users/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Failed to create user: ${err.error}`);
+    }
+
+    const created = await res.json();
+    setAndSave((prev) => [created, ...prev]); // optional local cache
     setAddOpen(false);
     resetAddForm();
-  };
+  } catch (err) {
+    console.error("Error creating researcher:", err);
+    alert("Something went wrong while creating the user.");
+  }
+};
+
 
   const countText = useMemo(
     () => `Showing 1–${researchers.length} of ${researchers.length}`,

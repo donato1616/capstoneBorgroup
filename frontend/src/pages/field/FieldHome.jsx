@@ -9,7 +9,7 @@ export default function FieldHome({ user }) {
     // Placeholder backend call
     async function fetchData() {
       try {
-        const res = await fetch(`http://localhost:3001/api/field/dashboard/${user.id}`);
+        const res = await fetch(`http://localhost:5050/api/field/dashboard/${user.id}`);
         const data = await res.json();
         setDashboardData(data);
       } catch (err) {

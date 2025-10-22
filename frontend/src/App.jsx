@@ -1,3 +1,8 @@
+import {Suspense} from "react";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { StackHandler, StackProvider, StackTheme } from "@stackframe/react";
+import { stackClientApp } from "./lib/stackClientApp.js";
+
 import { useEffect, useState } from "react";
 import {
   Bell,
@@ -52,7 +57,32 @@ import DatasetAnalytics from "./components/DatasetAnalytics.jsx";
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
 
+function HandlerRoutes() {
+  const location = useLocation();
+  return <StackHandler app={stackClientApp} location={location.pathname} fullPage />;
+}
+
 export default function App() {
+  return (
+    <Suspense fallback={null}>
+      <BrowserRouter>
+        <StackProvider app={stackClientApp}>
+          <StackTheme>
+            <Routes>
+              {/* Stack Auth handler route */}
+              <Route path="/handler/*" element={<HandlerRoutes />} />
+
+              {/* Main Application */}
+              <Route path="/*" element={<MainApp />} />
+            </Routes>
+          </StackTheme>
+        </StackProvider>
+      </BrowserRouter>
+    </Suspense>
+  );
+}
+
+function MainApp() {
   // ====== Persistent tab states ======
   const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");
   const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");

@@ -5,8 +5,8 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 
 import datasetRoute from "./routes/dataset.js";
-import fieldRouter from "./routes/field.js";
-app.use("/api/field", fieldRouter);
+import fieldRouter from "./api/field.js";
+import userRoutes from "./routes/users.js";
 
 dotenv.config();
 
@@ -46,6 +46,8 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ---- Routes ----
 app.use("/api/dataset", datasetRoute);
+app.use("/api/field", fieldRouter); // ✅ moved *after* app initialization
+app.use("/api/users", userRoutes);
 
 // ====== Helper: resolve dataset UUID ======
 async function resolveDatasetUuid(idParam) {
