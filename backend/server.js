@@ -5,6 +5,7 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 
 import datasetRoute from "./routes/dataset.js";
+import auditRoute from "./routes/audit.js"; // <-- add this
 
 dotenv.config();
 
@@ -44,6 +45,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ---- Routes ----
 app.use("/api/dataset", datasetRoute);
+app.use("/api", auditRoute); // <-- add this
 
 // ====== Helper: resolve dataset UUID ======
 async function resolveDatasetUuid(idParam) {
