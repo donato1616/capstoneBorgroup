@@ -1,46 +1,74 @@
 // frontend/src/pages/admin/Overview.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, KPI, Filter } from "../../components/ui";
 import UploadData from "../../components/UploadData";
 import BarSimple from "../../components/charts/BarSimple";
+import HistoNumeric from "../../components/charts/HistoNumeric";
+import BarTopText from "../../components/charts/BarTopText";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
 export default function Overview({ selectedDataset }) {
   const [summary, setSummary] = useState(null);
   const [regionCompleted, setRegionCompleted] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [qCode, setQCode] = useState("");
+  const [qDist, setQDist] = useState({ numeric_bins: [], text_top: [] });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  async function fetchJson(url) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  }
-
+  // load summary + regions + question list
   useEffect(() => {
-    if (!selectedDataset) { setSummary(null); setRegionCompleted([]); return; }
+    if (!selectedDataset) {
+      setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
+      return;
+    }
     (async () => {
       try {
-        setLoading(true);
-        const [s, reg] = await Promise.all([
+        setLoading(true); setErr("");
+        const [s, reg, q] = await Promise.all([
           fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/summary`),
-          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/by-region-completed`)
+          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/by-region-completed`),
+          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/questions`),
         ]);
+
         setSummary(s);
         setRegionCompleted((reg.items || []).map(r => ({ label: r.region, value: r.completed })));
-        setErr("");
+
+        const qs = (q.items?.length ? q.items : s.top_questions || []).map(x => x.question ? x : {question: x});
+        setQuestions(qs);
+        setQCode(qs?.[0]?.question || "");
+
       } catch (e) {
         console.error("overview load failed", e);
         setErr("Failed to load summary");
-        setSummary(null);
-        setRegionCompleted([]);
+        setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
       } finally {
         setLoading(false);
       }
     })();
   }, [selectedDataset]);
+
+  // load distribution when qCode changes
+  useEffect(() => {
+    if (!selectedDataset || !qCode) { setQDist({ numeric_bins: [], text_top: [] }); return; }
+    (async () => {
+      try {
+        const d = await fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/qdist?questionCode=${encodeURIComponent(qCode)}`);
+        setQDist(d);
+      } catch (e) {
+        console.error(e);
+        setQDist({ numeric_bins: [], text_top: [] });
+      }
+    })();
+  }, [selectedDataset, qCode]);
 
   const totalResp = summary?.respondent_count ?? null;
   const factCount = summary?.fact_count ?? null;
@@ -54,7 +82,6 @@ export default function Overview({ selectedDataset }) {
     try {
       const r = await fetch(`${API_BASE}/api/dataset/${selectedDataset}`, { method: "DELETE" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      // simplest: refresh so the global selector repopulates
       window.location.reload();
     } catch (e) {
       alert("Delete failed: " + e.message);
@@ -84,9 +111,32 @@ export default function Overview({ selectedDataset }) {
         <KPI label="Respondents" value={loading ? "…" : fmt(totalResp)} />
         <KPI label="Facts Indexed" value={loading ? "…" : fmt(factCount)} sub="Long-form Q/A facts" />
         <KPI label="Top Region" value={topRegion ? topRegion.region : "Unspecified"} sub={topRegion ? `${fmt(topRegion.facts)} facts` : ""} />
-        <KPI label="Completed %" value={completedPct === null ? "—" : `${completedPct}%`} sub="(dated interviews)" />
+        <KPI label="Completed %" value={completedPct === null ? "—" : `${completedPct}%`} sub="(dated or dense)" />
       </div>
 
+      {/* Question Distribution */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-medium">Question Distribution</div>
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={qCode}
+            onChange={(e) => setQCode(e.target.value)}
+          >
+            {(questions || []).map(q => (
+              <option key={q.question} value={q.question}>
+                {q.question}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="p-4"><HistoNumeric bins={qDist.numeric_bins} /></Card>
+          <Card className="p-4"><BarTopText items={qDist.text_top} /></Card>
+        </div>
+      </Card>
+
+      {/* Completed by Region */}
       <Card className="p-4">
         <div className="text-sm font-medium mb-2">Survey completed by region</div>
         {regionCompleted.length === 0
