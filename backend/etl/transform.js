@@ -1,4 +1,4 @@
-// backend/etl/transform.js (CommonJS)
+// backend/etl/transform.js
 const dayjs = require('dayjs');
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const crypto = require('crypto');
@@ -14,14 +14,14 @@ const META_HEADERS = new Set([
   'upload',
   'region','area','territory','zone','cluster','state','province','district',
   'city','municipality','barangay','city_municipality',
-  'srvyr','interviewer','fieldworker','interviewername','interviewer_id',
+  'srvyr','interviewer','fieldworker','interviewername','interviewer_id','recruiter',
   'mode','channel','modeofinterview','interview_mode',
   'latitude','longitude','gps_lat','gps_lng','gps_latitude','gps_longitude',
-  'duration','duration_sec','is_complete','status'
+  'duration','duration_sec','is_complete','status',
+  'remarks','comment','comments','note','notes' // we’ll read dates from these but don’t treat as questions
 ]);
 
 // map normalized header -> original header
-// pick tries a list of candidate header names (raw) and returns the first non-empty value
 function pick(row, candidates, normMap) {
   if (!candidates) return undefined;
   for (const c of candidates) {
@@ -37,7 +37,6 @@ function pick(row, candidates, normMap) {
 function excelSerialToDate(num) {
   const n = Number(num);
   if (!Number.isFinite(n)) return null;
-  // discard impossible ranges
   if (n < 59 || n > 100000) return null;
   const base = Date.UTC(1899, 11, 30);
   return new Date(base + n * 86400000);
@@ -53,25 +52,67 @@ function parseDate(v) {
     if (d) return d;
   }
 
-  // try a few common textual formats
   const trials = [
-    'YYYY-MM-DD',
-    'YYYY/MM/DD',
-    'MM/DD/YYYY', 'M/D/YYYY',
-    'DD/MM/YYYY', 'D/M/YYYY',
+    'YYYY-MM-DD', 'YYYY/MM/DD',
+    'MM/DD/YYYY','M/D/YYYY',
+    'DD/MM/YYYY','D/M/YYYY',
     'YYYY-MM-DD HH:mm:ss',
-    'MM/DD/YYYY HH:mm', 'DD/MM/YYYY HH:mm',
-    'D MMM YYYY', 'DD-MMM-YYYY', 'YYYY-MMM-DD',
+    'MM/DD/YYYY HH:mm','DD/MM/YYYY HH:mm',
+    'D MMM YYYY','DD-MMM-YYYY','YYYY-MMM-DD',
   ];
   for (const f of trials) {
     const d = dayjs(String(v).trim(), f, true);
     if (d.isValid()) return d.toDate();
   }
 
-  // final loose parse
   const d = dayjs(v);
   if (d.isValid()) return d.toDate();
+  return null;
+}
 
+// parse date tokens hiding inside free-text like “062725 - …” or “6/27/25”
+function parseDateFromFreeText(text) {
+  if (!text) return null;
+  const s = String(text);
+
+  // 6-digit token, assume MMDDYY by default (e.g., 062725 => 2025-06-27)
+  const m6 = s.match(/\b(\d{6})\b/);
+  if (m6) {
+    const t = m6[1];
+    const mm = Number(t.slice(0,2));
+    const dd = Number(t.slice(2,4));
+    let yy = Number(t.slice(4,6));
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      yy = yy + (yy >= 70 ? 1900 : 2000); // 70–99 → 19xx, else 20xx
+      return new Date(yy, mm - 1, dd);
+    }
+  }
+
+  // with separators: 6/27/25 or 27-06-2025
+  const mSep = s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/);
+  if (mSep) {
+    let a = Number(mSep[1]), b = Number(mSep[2]), c = Number(mSep[3]);
+    const yyyy = c < 100 ? c + 2000 : c;
+    // prefer MM/DD/YY if both plausible; switch if first token > 12
+    let mm = a, dd = b;
+    if (a > 12 && b <= 12) { mm = b; dd = a; }
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) return new Date(yyyy, mm - 1, dd);
+  }
+  return null;
+}
+
+// scan any string cell for a date
+function findAnyDateInRow(row) {
+  for (const k of Object.keys(row)) {
+    const v = row[k];
+    if (v == null) continue;
+    const direct = parseDate(v);
+    if (direct) return direct;
+    if (typeof v === 'string') {
+      const t = parseDateFromFreeText(v);
+      if (t) return t;
+    }
+  }
   return null;
 }
 
@@ -85,9 +126,8 @@ function parseNum(v) {
 function isQuestionCol(headerNorm) {
   if (META_HEADERS.has(headerNorm)) return false;
   if (isQuestionColHeuristic(headerNorm)) return true;
-  // allow generic measures that aren't obvious meta fields
   if (/(score|rating|rank|value|count|amount|index|total|pct|percent)/i.test(headerNorm)) return true;
-  return false;
+  return true; // be permissive for ragged spreadsheets
 }
 
 function syntheticId(row, i) {
@@ -114,12 +154,22 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
 
-    const respondentIdRaw = pick(r, canon.respondentId, normMap);
-    const interviewDate = parseDate(pick(r, canon.interviewDate, normMap));
-    const region = pick(r, canon.region, normMap);
+    // try canonical fields first
+    const respondentIdRaw = pick(r, canon.respondentId, normMap) ||
+                            r['Rno'] || r['RNO'] || r['rno']; // common roster fields
+    let interviewDate = parseDate(pick(r, canon.interviewDate, normMap));
+    const region = pick(r, canon.region, normMap) || r['Area'] || r['area'];
     const city = pick(r, canon.city, normMap);
-    const interviewer = pick(r, canon.interviewer, normMap);
+    const interviewer = pick(r, canon.interviewer, normMap) || r['Recruiter'] || r['recruiter'];
     const channel = pick(r, canon.channel, normMap);
+
+    // fallback: date hiding in remarks / any string
+    if (!interviewDate) {
+      const frmRemarks = parseDateFromFreeText(
+        pick(r, ['remarks','comment','comments','note','notes','status'], normMap)
+      );
+      interviewDate = frmRemarks || findAnyDateInRow(r);
+    }
 
     const respondentId = respondentIdRaw ? String(respondentIdRaw).trim() : syntheticId(r, i);
     if (!respondentIdRaw) issues.push({ row: i, type: 'synthetic_respondent_id' });
@@ -133,7 +183,9 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
       channel: channel ? String(channel).trim() : null
     };
 
-    // pivot to long
+    let pushed = 0;
+
+    // pivot each non-blank, non-meta column as a "fact"
     for (const { norm, orig } of headerNorms) {
       if (!nonBlankColumns.has(norm)) continue;
       if (!isQuestionCol(norm)) continue;
@@ -141,7 +193,6 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
       const rawVal = r[orig];
       const textVal = (rawVal === '' || rawVal === undefined || rawVal === null) ? null : String(rawVal);
       const numVal = parseNum(rawVal);
-
       if (textVal === null && numVal === null) continue;
 
       outFacts.push({
@@ -154,6 +205,25 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
         questionCode: orig,     // keep original header for readability
         answerText: textVal,
         answerNum: numVal,
+        rawJson: r,
+        cleanJson: cleanRow
+      });
+      pushed++;
+    }
+
+    // If nothing qualified as a question (common for roster/status sheets),
+    // ensure at least one fact so the respondent is counted.
+    if (pushed === 0) {
+      outFacts.push({
+        respondentId: cleanRow.respondentId,
+        interviewDate: cleanRow.interviewDate,
+        region: cleanRow.region,
+        city: cleanRow.city,
+        interviewer: cleanRow.interviewer,
+        channel: cleanRow.channel,
+        questionCode: '_row_presence',
+        answerText: '1',
+        answerNum: 1,
         rawJson: r,
         cleanJson: cleanRow
       });
