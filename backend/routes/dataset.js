@@ -512,10 +512,13 @@ function buildSyntheticHistory(total, days = 5) {
 }
 
 // Detailed regression endpoint (history + fitted + horizon)
+// --- regression with baseline + out-of-sample holdout (no data leakage) ---
 router.get('/:id/predict/regression', async (req, res) => {
   try {
-    const id = parseId(req.params.id);
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) throw new Error('Invalid dataset id');
 
+    // build daily series (distinct respondents per date)
     const daily = await prisma.$queryRaw`
       SELECT DATE("interviewDate") AS day,
              COUNT(DISTINCT "respondentId")::int AS completed
@@ -524,38 +527,132 @@ router.get('/:id/predict/regression', async (req, res) => {
       GROUP BY day
       ORDER BY day
     `;
-    let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: r.day }));
-
+    let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: String(r.day) }));
     let synthetic = false;
+
+    // synthesize a short plausible history if there are <2 dated points
     if (pts.length < 2) {
-      const totalDistinct = await prisma.$queryRaw`
+      const td = await prisma.$queryRaw`
         SELECT COUNT(DISTINCT "respondentId")::int AS n
         FROM "ResponseFact" WHERE "datasetId" = ${id}
       `;
-      const total = totalDistinct?.[0]?.n || 0;
-      const hist = buildSyntheticHistory(total, Math.min(7, Math.max(3, Math.ceil(Math.sqrt(Math.max(2, total))))));
-      pts = hist.map((h, i) => ({ x: i, y: h.value, date: h.date }));
+      let total = td?.[0]?.n || 0;
+      if (total === 0) {
+        const est = await prisma.$queryRaw`
+          SELECT COUNT(*)::int AS facts,
+                 NULLIF(COUNT(DISTINCT "questionCode"),0)::int AS qdim
+          FROM "ResponseFact" WHERE "datasetId" = ${id}
+        `;
+        const facts = est?.[0]?.facts || 0;
+        const qdim  = est?.[0]?.qdim  || 0;
+        if (qdim > 0) total = Math.round(facts / qdim);
+      }
+      const days = Math.min(7, Math.max(3, Math.ceil(Math.sqrt(Math.max(2, total)))));
+      const weights = Array.from({ length: days }, (_, i) => i + 1);
+      const sumW = weights.reduce((s, w) => s + w, 0) || 1;
+      const vals = weights.map(w => Math.round((w / sumW) * total));
+      let diff = total - vals.reduce((s, v) => s + v, 0);
+      let idx = days - 1; while (diff-- > 0) { vals[idx]++; idx = (idx - 1 + days) % days; }
+      const today = new Date();
+      pts = Array.from({ length: days }, (_, i) => {
+        const d = new Date(today); d.setDate(d.getDate() - (days - i));
+        return { x: i, y: vals[i], date: d.toISOString().slice(0,10) };
+      });
       synthetic = true;
     }
 
-    const fit = linearFit(pts);
-
-    const horizon = [];
-    if (pts.length) {
-      const lastDate = new Date(pts[pts.length - 1].date);
-      const lastX = pts[pts.length - 1].x;
-      for (let k = 1; k <= 7; k++) {
-        const d = new Date(lastDate); d.setDate(d.getDate() + k);
-        const x = lastX + k;
-        horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(fit.a * x + fit.b)) });
-      }
+    // guard against degenerate series (flat or single point)
+    const uniqueY = new Set(pts.map(p => p.y)).size;
+    const n = pts.length;
+    if (n < 2 || uniqueY <= 1) {
+      return res.json({
+        v: 2,
+        dataset_id: id,
+        synthetic,
+        unit: 'respondents/day',
+        metrics: { r2: null, mse: 0, rmse: 0, baseline_mse: null, baseline_rmse: null, improvement_vs_baseline: null, mape: null, oos_rmse: null, oos_mape: null, oos_r2: null },
+        history: pts.map(p => ({ date: p.date, actual: p.y, fitted: p.y })),
+        horizon: []
+      });
     }
 
+    // ---------- fit (in-sample) ----------
+    const sum = f => pts.reduce((s, p) => s + f(p), 0);
+    const sx = sum(p => p.x), sy = sum(p => p.y);
+    const sxx = sum(p => p.x * p.x), sxy = sum(p => p.x * p.y);
+    const denom = (n * sxx - sx * sx) || 1;
+    const a = (n * sxy - sx * sy) / denom;
+    const b = (sy - a * sx) / n;
+    const yhat = pts.map(p => a * p.x + b);
+    const ybar = sy / n;
+
+    const ssRes = pts.reduce((s, p, i) => s + Math.pow(p.y - yhat[i], 2), 0);
+    const ssTot = pts.reduce((s, p) => s + Math.pow(p.y - ybar, 2), 0) || 1;
+    const mse = ssRes / n;
+    const r2  = 1 - (ssRes / ssTot);
+    const mape = (() => {
+      const ape = pts.filter((p,i)=>p.y!==0).map((p,i)=>Math.abs((p.y - yhat[i]) / p.y));
+      return ape.length ? (ape.reduce((s,v)=>s+v,0)/ape.length) : null;
+    })();
+
+    // baseline = mean(y)
+    const baselineMSE  = pts.reduce((s,p)=>s+Math.pow(p.y - ybar,2),0) / n;
+    const baselineRMSE = Math.sqrt(baselineMSE);
+    const rmse         = Math.sqrt(mse);
+    const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
+
+    // ---------- out-of-sample holdout (last 20%, min 2 points) ----------
+    let oos_rmse = null, oos_mape = null, oos_r2 = null;
+    if (!synthetic && n >= 5) {
+      const h = Math.max(2, Math.floor(0.2 * n));
+      const train = pts.slice(0, n - h);
+      const test  = pts.slice(n - h);
+
+      const tsx = train.reduce((s,p)=>s+p.x,0);
+      const tsy = train.reduce((s,p)=>s+p.y,0);
+      const tsxx= train.reduce((s,p)=>s+p.x*p.x,0);
+      const tsxy= train.reduce((s,p)=>s+p.x*p.y,0);
+      const tden= (train.length * tsxx - tsx*tsx) || 1;
+      const ta  = (train.length * tsxy - tsx*tsy) / tden;
+      const tb  = (tsy - ta * tsx) / train.length;
+
+      const testY    = test.map(p => p.y);
+      const testYhat = test.map(p => ta * p.x + tb);
+      const tybar = testY.reduce((s,v)=>s+v,0) / test.length;
+
+      const tssRes = testY.reduce((s,v,i)=>s+Math.pow(v - testYhat[i],2),0);
+      const tssTot = testY.reduce((s,v)=>s+Math.pow(v - tybar,2),0) || 1;
+      oos_rmse = Math.sqrt(tssRes / test.length);
+      oos_r2   = 1 - (tssRes / tssTot);
+      const tape = testY.filter((v,i)=>v!==0).map((v,i)=>Math.abs((v - testYhat[i])/v));
+      oos_mape = tape.length ? (tape.reduce((s,v)=>s+v,0)/tape.length) : null;
+    }
+
+    // ---------- horizon (7 days) ----------
+    const horizon = [];
+    const lastDate = new Date(pts[pts.length - 1].date);
+    const lastX    = pts[pts.length - 1].x;
+    for (let k = 1; k <= 7; k++) {
+      const d = new Date(lastDate); d.setDate(d.getDate() + k);
+      const x = lastX + k;
+      horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(a * x + b)) });
+    }
+
+    // response
     res.json({
+      v: 2,                                 // version flag for sanity checks
       dataset_id: id,
       synthetic,
-      metrics: { r2: fit.r2, mse: fit.mse, mape: fit.mape },
-      history: pts.map((p, i) => ({ date: String(p.date), actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
+      unit: 'respondents/day',
+      metrics: {
+        r2, mse, rmse,
+        baseline_mse: baselineMSE,
+        baseline_rmse: baselineRMSE,
+        improvement_vs_baseline: improvement,
+        mape,
+        oos_rmse, oos_mape, oos_r2
+      },
+      history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(yhat[i])) })),
       horizon
     });
   } catch (e) {
@@ -563,7 +660,6 @@ router.get('/:id/predict/regression', async (req, res) => {
     res.status(500).json({ message: 'regression_failed', detail: e.message });
   }
 });
-
 // Compatibility alias used by some frontends: /forecast
 router.get('/:id/forecast', async (req, res) => {
   try {
@@ -630,4 +726,91 @@ router.get('/:id/preview', async (req, res) => {
   }
 });
 
+
+// Add routes for regression models in `backend/routes/dataset.js`
+
+// --- Linear Regression Route ---
+router.post('/predict/linear-regression', async (req, res) => {
+  try {
+    const { datasetId, X_data, y_data } = req.body;  // Assume X_data is features and y_data is target
+
+    // Call Python script to run Linear Regression
+    const pyProcess = spawn('python', ['./etl/linear_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
+    
+    let output = '', errorOutput = '';
+    pyProcess.stdout.on('data', data => { output += data.toString(); });
+    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
+
+    pyProcess.on('close', (code) => {
+      if (code !== 0) {
+        return res.status(500).json({ error: 'Linear Regression failed', detail: errorOutput });
+      }
+
+      const result = JSON.parse(output);
+      res.json({
+        r2: result.r2,
+        mse: result.mse,
+        predictions: result.predictions,
+        chart: result.chart
+      });
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Error in Linear Regression', detail: e.message });
+  }
+});
+
+// --- Time Series Forecasting Route (ARIMA) ---
+router.post('/predict/arima', async (req, res) => {
+  try {
+    const { datasetId, timeSeriesData } = req.body;
+
+    const pyProcess = spawn('python', ['./etl/arima_forecast.py', '--timeSeriesData', JSON.stringify(timeSeriesData)]);
+
+    let output = '', errorOutput = '';
+    pyProcess.stdout.on('data', data => { output += data.toString(); });
+    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
+
+    pyProcess.on('close', (code) => {
+      if (code !== 0) {
+        return res.status(500).json({ error: 'ARIMA forecasting failed', detail: errorOutput });
+      }
+
+      const forecast = JSON.parse(output);
+      res.json({
+        forecast: forecast,
+        chart: forecast.chart
+      });
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Error in ARIMA forecasting', detail: e.message });
+  }
+});
+
+// --- Logistic Regression Route ---
+router.post('/predict/logistic-regression', async (req, res) => {
+  try {
+    const { datasetId, X_data, y_data } = req.body;  // Assume X_data is features and y_data is target
+
+    const pyProcess = spawn('python', ['./etl/logistic_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
+
+    let output = '', errorOutput = '';
+    pyProcess.stdout.on('data', data => { output += data.toString(); });
+    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
+
+    pyProcess.on('close', (code) => {
+      if (code !== 0) {
+        return res.status(500).json({ error: 'Logistic Regression failed', detail: errorOutput });
+      }
+
+      const result = JSON.parse(output);
+      res.json({
+        accuracy: result.accuracy,
+        predictions: result.predictions,
+        chart: result.chart
+      });
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Error in Logistic Regression', detail: e.message });
+  }
+});
 module.exports = router;

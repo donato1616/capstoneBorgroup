@@ -6,6 +6,13 @@ async function get(url) {
   return res.json();
 }
 
+export async function fetchRegression(datasetId) {
+  if (!datasetId) throw new Error('datasetId required');
+  const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/predict/regression`);
+  if (!res.ok) throw new Error(`Regression HTTP ${res.status}`);
+  return await res.json();
+}
+
 export const listDatasets = () => get(`${API_BASE}/api/dataset`);
 export const fetchAnalytics = (id) => get(`${API_BASE}/api/dataset/${id}/analytics`);
 export const fetchDatasetSummary = (id) => get(`${API_BASE}/api/dataset/${id}/summary`);
