@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
@@ -15,6 +16,7 @@ import Predictive from "./pages/admin/Predictive.jsx";
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
 import AdminProfile from "./pages/admin/AdminProfile.jsx";
+import AdminDashboard from './pages/admin/index.jsx';
 
 // Field researcher pages
 import FieldHome from "./pages/field/FieldHome.jsx";
@@ -30,6 +32,9 @@ import Reports from "./pages/analyst/Reports.jsx";
 import GenerateReports from "./pages/analyst/GenerateReports.jsx";
 import DataExplorer from "./pages/analyst/DataExplorer.jsx";
 import AnalystProfile from "./pages/analyst/Profile.jsx";
+
+import DatasetSelector from "./components/DatasetSelector.jsx";
+import DatasetAnalytics from "./components/DatasetAnalytics.jsx";
 
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
@@ -61,6 +66,10 @@ export default function App() {
       localStorage.removeItem("auth_token");
     }
   }, [user]);
+
+  // ================= Dataset Selection State (Admin Overview) =================
+  const [selectedDataset, setSelectedDataset] = useState('');
+  const [filters, setFilters] = useState({ region: '', isComplete: undefined });
 
   if (!user) {
     return <Login onLogin={setUser} />;
@@ -259,7 +268,55 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-          {active === "overview" && <Overview />}
+          {active === "overview" && (
+            <div>
+              {/* ================= DATASET SELECTION & FILTERING ================= */}
+              <h2 className="text-xl font-semibold mb-4">Dataset Analytics</h2>
+
+              {/* Dataset Selector */}
+              <DatasetSelector onSelectDataset={setSelectedDataset} />
+
+              {/* Filters */}
+              <div className="my-4 flex gap-4">
+                <label>
+                  Region:
+                  <input
+                    type="text"
+                    value={filters.region}
+                    onChange={(e) => setFilters({ ...filters, region: e.target.value })}
+                    className="ml-2 px-2 py-1 border rounded"
+                  />
+                </label>
+
+                <label>
+                  Completed:
+                  <select
+                    value={filters.isComplete === undefined ? '' : String(!!filters.isComplete)}
+                    onChange={(e) =>
+                      setFilters({
+                        ...filters,
+                        isComplete:
+                          e.target.value === ''
+                            ? undefined
+                            : e.target.value === 'true'
+                      })
+                    }
+                    className="ml-2 px-2 py-1 border rounded"
+                  >
+                    <option value="">All</option>
+                    <option value="true">Completed</option>
+                    <option value="false">Not Completed</option>
+                  </select>
+                </label>
+              </div>
+
+              {/* Legacy dataset analytics (keep for now if you still use it) */}
+              <DatasetAnalytics datasetId={selectedDataset} filters={filters} />
+
+              {/* New Overview analytics bound to selectedDataset */}
+              <Overview selectedDataset={selectedDataset} />
+            </div>
+          )}
           {active === "completion" && <Completion />}
           {active === "predictive" && <Predictive />}
           {active === "field" && <FieldMgmt />}
