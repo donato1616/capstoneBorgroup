@@ -1,24 +1,91 @@
 // backend/routes/dataset.js
 const express = require('express');
 const router = express.Router();
+
 const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { spawn } = require('child_process'); // <-- required by your ML routes
+
 const { PrismaClient } = require('@prisma/client');
 const { chooseMapping, readBestSheet } = require('../etl/loader');
 const { consolidateRows } = require('../etl/transform');
 
 const prisma = new PrismaClient();
 
-// Multer in-memory so req.file.buffer is available
-const upload = multer({
+// ---------------------------- config knobs ----------------------------
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 200);
+const INSERT_CHUNK = Number(process.env.INSERT_CHUNK || 5000);
+const USE_TX = String(process.env.USE_TX || '0') === '1';
+const SKIP_DUPLICATES = String(process.env.SKIP_DUPLICATES || '1') === '1';
+const UPLOAD_STORAGE = (process.env.UPLOAD_STORAGE || 'disk').toLowerCase(); // 'disk' | 'memory'
+// Completion density threshold (soft fallback). Make it adjustable for defense.
+const COMPLETION_DENSITY_PCT = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
+
+// ---------------------------- upload middlewares ----------------------------
+const memoryUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
+
+const diskUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dest = path.join(os.tmpdir(), 'uploads');
+      fs.mkdir(dest, { recursive: true }, () => cb(null, dest));
+    },
+    filename: (req, file, cb) => {
+      const safe = String(file.originalname || 'upload').replace(/[^\w.\-]+/g, '_');
+      cb(null, `${Date.now()}_${safe}`);
+    }
+  }),
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
+});
+
+function getUploadMiddleware() {
+  return UPLOAD_STORAGE === 'memory' ? memoryUpload.single('file') : diskUpload.single('file');
+}
 
 // ---------------------------- helpers ----------------------------
 function parseId(reqParam) {
   const n = Number(String(reqParam || '').trim());
   if (!Number.isFinite(n)) throw new Error('Invalid dataset id');
   return n;
+}
+
+function readFileToBuffer(file) {
+  if (file?.buffer) return file.buffer;
+  if (file?.path) return fs.readFileSync(file.path);
+  return null;
+}
+
+// Numeric-ish detector for cleaning text tops (and coercing numeric text → number)
+function isNumericish(s) {
+  if (s === null || s === undefined) return false;
+  const t = String(s).trim();
+  if (!t) return false;
+  // Allow +/-, thousands separators, decimals, optional percent
+  if (/^[+\-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$/.test(t)) return true;
+  if (/^[+\-]?\d+(?:\.\d+)?%?$/.test(t)) return true;
+  return false;
+}
+
+function coerceNumeric(s) {
+  const t = String(s || '').trim();
+  if (!isNumericish(t)) return null;
+  // Keep as “human scale” (50% -> 50) for bins that match what users expect
+  const cleaned = t.replace(/[ ,%]/g, '');
+  const v = Number(cleaned);
+  return Number.isFinite(v) ? v : null;
+}
+
+// Light text normalizer to consolidate tokens
+function normTextToken(s) {
+  return String(s || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
+    .toUpperCase();
 }
 
 // ---------------------------- list ----------------------------
@@ -53,17 +120,29 @@ router.get('/_health', async (_req, res) => {
   }
 });
 
-// ---------------------------- upload ----------------------------
-router.post('/upload', upload.single('file'), async (req, res) => {
+// ---------------------------- upload (with perf & robustness) ----------------------------
+router.post('/upload', getUploadMiddleware(), async (req, res) => {
+  const T0 = Date.now();
+  let T = T0;
+  const tick = (label) => { const now = Date.now(); console.log(`[upload] +${now - T}ms ${label}`); T = now; };
+
   try {
-    if (!req.file?.buffer) return res.status(400).json({ error: 'No file uploaded' });
+    if (!req.file?.buffer && !req.file?.path) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
 
     const fname = req.file.originalname || 'upload.xlsx';
+    tick(`received: ${fname} (${req.file.size || 0} bytes)`);
+
     const lower = fname.toLowerCase();
     const isCsv = lower.endsWith('.csv');
     const isXlsx = lower.endsWith('.xlsx') || lower.endsWith('.xls');
     if (!isCsv && !isXlsx) return res.status(400).json({ error: 'Only .csv or .xlsx/.xls allowed' });
 
+    const fileBuf = readFileToBuffer(req.file);
+    tick(`read file into buffer (${fileBuf?.length || 0} bytes)`);
+
+    // dataset row
     const ds = await prisma.datasets.create({
       data: {
         name: req.body?.name || fname,
@@ -74,15 +153,20 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         tags: req.body?.tags || ''
       }
     });
+    tick(`created dataset row id=${ds.id}`);
 
-    // parse
+    // parse workbook
     let rows, sheetName, normMap;
     try {
-      const r = readBestSheet(req.file.buffer, fname, chooseMapping(fname));
+      const r = readBestSheet(fileBuf, fname, chooseMapping(fname));
       rows = r.rows; sheetName = r.sheetName; normMap = r.normMap;
     } catch (e) {
       return res.status(400).json({ error: 'Failed to parse file', detail: e.message });
+    } finally {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
     }
+    tick(`parsed workbook: sheet="${sheetName}", rows=${rows?.length || 0}`);
+
     if (!rows?.length) return res.status(400).json({ error: 'No data rows detected' });
 
     // transform -> facts
@@ -93,14 +177,24 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     } catch (e) {
       return res.status(500).json({ error: 'Transform failed', detail: e.message });
     }
+    tick(`transformed to facts=${facts.length} (issues=${issues.length})`);
 
-    // bulk insert
-    try {
-      const CHUNK = 1000;
-      for (let i = 0; i < facts.length; i += CHUNK) {
-        const chunk = facts.slice(i, i + CHUNK);
-        await prisma.responseFact.createMany({
-          data: chunk.map(f => ({
+    // deduplicate raw/clean JSON per respondent+date (massive write reduction)
+    const firstJsonForKey = new Set();
+    const keyOf = (f) => {
+      const d = f.interviewDate ? new Date(f.interviewDate).toISOString().slice(0,10) : '';
+      return `${f.respondentId}||${d}`;
+    };
+
+    // insert in batches, optionally in one transaction
+    const doInsertBatches = async (client) => {
+      for (let i = 0; i < facts.length; i += INSERT_CHUNK) {
+        const chunk = facts.slice(i, i + INSERT_CHUNK);
+        const mapped = chunk.map(f => {
+          const key = keyOf(f);
+          const include = !firstJsonForKey.has(key);
+          if (include) firstJsonForKey.add(key);
+          return {
             datasetId: ds.id,
             respondentId: f.respondentId,
             interviewDate: f.interviewDate ? new Date(f.interviewDate) : null,
@@ -111,16 +205,26 @@ router.post('/upload', upload.single('file'), async (req, res) => {
             questionCode: f.questionCode,
             answerText: f.answerText,
             answerNum: f.answerNum,
-            rawJson: f.rawJson,
-            cleanJson: f.cleanJson
-          })),
-          skipDuplicates: true
+            rawJson: include ? f.rawJson : null,
+            cleanJson: include ? f.cleanJson : null
+          };
         });
+
+        await client.responseFact.createMany({
+          data: mapped,
+          skipDuplicates: SKIP_DUPLICATES
+        });
+        tick(`inserted ${Math.min(i + mapped.length, facts.length)}/${facts.length}`);
       }
-    } catch (e) {
-      console.error('createMany failed', e);
-      return res.status(500).json({ error: 'Database insert failed', detail: e.message });
+    };
+
+    if (USE_TX) {
+      await prisma.$transaction(async (tx) => { await doInsertBatches(tx); });
+    } else {
+      await doInsertBatches(prisma);
     }
+
+    console.log(`[upload] total: ${Date.now() - T0}ms`);
 
     res.json({
       status: 'ok',
@@ -131,6 +235,13 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       file_info: { name: fname, size_bytes: req.file.size, mimetype: req.file.mimetype }
     });
   } catch (e) {
+    if (e && e.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: 'file_too_large',
+        message: `File exceeds ${MAX_UPLOAD_MB} MB limit`,
+        max_mb: MAX_UPLOAD_MB
+      });
+    }
     console.error('upload failed', e);
     res.status(500).json({ error: 'Upload/ETL failed', detail: e.message });
   }
@@ -163,24 +274,20 @@ router.post('/:id/delete', async (req, res) => {
   }
 });
 
-// ==================== SUMMARY & ANALYTICS ROUTES (restored + extended) ====================
-
-// GET /api/dataset/:id/summary  (robust completion + top questions)
+// ==================== SUMMARY & ANALYTICS ROUTES ====================
 router.get('/:id/summary', async (req, res) => {
   try {
     const id = parseId(req.params.id);
 
-    // total distinct respondents
     const totalRes = await prisma.$queryRaw`
       SELECT COUNT(DISTINCT "respondentId")::int AS n
       FROM "ResponseFact" WHERE "datasetId" = ${id}
     `;
     const respondent_count = totalRes?.[0]?.n || 0;
 
-    // fact count
     const fact_count = await prisma.responseFact.count({ where: { datasetId: id } });
 
-    // HARD completion: interviewDate or explicit completion flag
+    // HARD completion: dated or explicit flag
     const completedHard = await prisma.$queryRaw`
       SELECT COUNT(DISTINCT "respondentId")::int AS n
       FROM "ResponseFact"
@@ -195,12 +302,12 @@ router.get('/:id/summary', async (req, res) => {
                  "rawJson"  ->>'Completed',
                  "rawJson"  ->>'Status'
                )
-             ) ~ '(?:^|\\b)(1|true|yes|completed|complete|done|finished)(?:\\b|$)'
+             ) ~ '(?:^|\\b)(1|true|yes|completed|complete|done|finished|ok)(?:\\b|$)'
         )
     `;
     const hard = completedHard?.[0]?.n || 0;
 
-    // SOFT completion (fallback) when hard=0: ≥80% of max answers / respondent
+    // SOFT completion: density >= COMPLETION_DENSITY_PCT * max(per-respondent facts)
     const soft = hard > 0 ? 0 : (await prisma.$queryRaw`
       WITH per AS (
         SELECT "respondentId", COUNT(*)::int AS c
@@ -210,14 +317,13 @@ router.get('/:id/summary', async (req, res) => {
       m AS (SELECT MAX(c) AS mx FROM per)
       SELECT COUNT(*)::int AS n
       FROM per, m
-      WHERE per.c >= GREATEST(1, FLOOR(0.8 * m.mx))
+      WHERE per.c >= GREATEST(1, FLOOR(${COMPLETION_DENSITY_PCT} * m.mx))
     `)?.[0]?.n || 0;
 
     const completed_respondents = hard > 0 ? hard : soft;
-    const completion_method = hard > 0 ? 'dated_or_flagged' : 'soft_density';
+    const completion_method = hard > 0 ? 'dated_or_flagged' : `soft_density_${Math.round(COMPLETION_DENSITY_PCT*100)}pct`;
     const completed_pct = respondent_count ? (100 * completed_respondents / respondent_count) : 0;
 
-    // Top regions by facts (for KPI)
     const by_region_facts = await prisma.$queryRaw`
       SELECT COALESCE(region,'Unspecified') AS region, COUNT(*)::int AS facts
       FROM "ResponseFact" WHERE "datasetId" = ${id}
@@ -226,7 +332,6 @@ router.get('/:id/summary', async (req, res) => {
       LIMIT 10
     `;
 
-    // Top questions (for dropdown / summary)
     const top_questions = await prisma.$queryRaw`
       SELECT "questionCode" AS question, COUNT(*)::int AS c
       FROM "ResponseFact"
@@ -253,7 +358,6 @@ router.get('/:id/summary', async (req, res) => {
   }
 });
 
-// GET /api/dataset/:id/questions  (simple list)
 router.get('/:id/questions', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -272,7 +376,6 @@ router.get('/:id/questions', async (req, res) => {
   }
 });
 
-// GET /api/dataset/:id/questions/with-sample  (UX polish)
 router.get('/:id/questions/with-sample', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -301,7 +404,7 @@ router.get('/:id/questions/with-sample', async (req, res) => {
   }
 });
 
-// GET /api/dataset/:id/qdist?questionCode=Q17
+// ---------- CLEANED QDIST (numeric coercion + text de-noising) ----------
 router.get('/:id/qdist', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -314,44 +417,63 @@ router.get('/:id/qdist', async (req, res) => {
       take: 100000
     });
 
-    const nums = rows.map(r => r.answerNum).filter(v => v !== null && v !== undefined).map(Number);
-    const texts = rows.map(r => r.answerText).filter(Boolean).map(s => String(s).trim()).filter(Boolean);
+    // Build numeric series (include numeric-like strings from answerText)
+    const nums = [];
+    for (const r of rows) {
+      if (r.answerNum !== null && r.answerNum !== undefined) {
+        const v = Number(r.answerNum);
+        if (Number.isFinite(v)) nums.push(v);
+      } else if (r.answerText && isNumericish(r.answerText)) {
+        const v = coerceNumeric(r.answerText);
+        if (v !== null) nums.push(v);
+      }
+    }
 
-    // numeric histogram
-    const hist = [];
+    // Build cleaned text series (exclude numeric-only strings)
+    const stop = new Set(['', 'N/A', 'NA', 'NONE', 'NULL', 'UNSPECIFIED', 'UNASSIGNED', '—', '-', 'NCL']);
+    const texts = [];
+    for (const r of rows) {
+      const raw = (r.answerText ?? '').toString().trim();
+      if (!raw) continue;
+      if (isNumericish(raw)) continue; // keep digits out of text tops
+      const token = normTextToken(raw);
+      if (!token || token.length < 2 || stop.has(token)) continue;
+      texts.push(token);
+    }
+
+    // Numeric hist: 6..25 bins using sqrt rule (bounded)
+    const numeric_bins = [];
     if (nums.length) {
       const min = Math.min(...nums), max = Math.max(...nums);
-      const k = Math.min(25, Math.max(6, Math.ceil(Math.sqrt(nums.length)))); // 6..25 bins
+      const k = Math.min(25, Math.max(6, Math.ceil(Math.sqrt(nums.length))));
       const step = ((max - min) / (k || 1)) || 1;
       for (let i = 0; i < k; i++) {
         const lo = min + i * step;
         const hi = (i === k - 1) ? max : lo + step;
-        const cnt = nums.reduce((s, v) => s + (v >= lo && v <= hi ? 1 : 0), 0);
-        hist.push({ lo, hi, count: cnt });
+        // left-open except first bin to avoid double counts on edges
+        const cnt = nums.reduce((s, v) => s + ((i === 0 ? v >= lo : v > lo) && v <= hi ? 1 : 0), 0);
+        numeric_bins.push({ lo, hi, count: cnt });
       }
     }
 
-    // top text
+    // Text top 50
     const tf = new Map();
     for (const t of texts) tf.set(t, (tf.get(t) || 0) + 1);
     const text_top = Array.from(tf.entries())
       .sort((a,b)=>b[1]-a[1])
-      .slice(0, 25)
+      .slice(0, 50)
       .map(([label, count]) => ({ label, count }));
 
-    res.json({ numeric_bins: hist, text_top });
+    res.json({ numeric_bins, text_top });
   } catch (e) {
     console.error('qdist_failed:', e);
     res.status(400).json({ message: 'qdist_failed', detail: e.message });
   }
 });
 
-// Completed by region (bar) with hard→soft fallback
 router.get('/:id/by-region-completed', async (req, res) => {
   try {
     const id = parseId(req.params.id);
-
-    // HARD (dated or explicit completion flag)
     const hardRows = await prisma.$queryRaw`
       SELECT COALESCE(region,'Unspecified') AS region,
              COUNT(DISTINCT "respondentId")::int AS completed
@@ -367,7 +489,7 @@ router.get('/:id/by-region-completed', async (req, res) => {
                  "rawJson"  ->>'Completed',
                  "rawJson"  ->>'Status'
                )
-             ) ~ '(?:^|\\b)(1|true|yes|completed|complete|done|finished)(?:\\b|$)'
+             ) ~ '(?:^|\\b)(1|true|yes|completed|complete|done|finished|ok)(?:\\b|$)'
         )
       GROUP BY region
       ORDER BY completed DESC
@@ -375,7 +497,6 @@ router.get('/:id/by-region-completed', async (req, res) => {
     `;
     if (hardRows.length > 0) return res.json({ items: hardRows });
 
-    // SOFT
     const softRows = await prisma.$queryRaw`
       WITH per AS (
         SELECT "respondentId",
@@ -388,7 +509,7 @@ router.get('/:id/by-region-completed', async (req, res) => {
       m AS (SELECT MAX(c) AS mx FROM per)
       SELECT region, COUNT(*)::int AS completed
       FROM per, m
-      WHERE per.c >= GREATEST(1, FLOOR(0.8 * m.mx))
+      WHERE per.c >= GREATEST(1, FLOOR(${COMPLETION_DENSITY_PCT} * m.mx))
       GROUP BY region
       ORDER BY completed DESC
       LIMIT 12
@@ -400,7 +521,6 @@ router.get('/:id/by-region-completed', async (req, res) => {
   }
 });
 
-// Daily series (dated only)
 router.get('/:id/series', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -418,7 +538,6 @@ router.get('/:id/series', async (req, res) => {
   }
 });
 
-// ---------------------------- completion ----------------------------
 router.get('/:id/completion/daily', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -473,52 +592,12 @@ router.get('/:id/completion/by-interviewer', async (req, res) => {
   }
 });
 
-// ---------------------------- predictive (regression + synthetic fallback) ----------------------------
-function linearFit(points) {
-  const n = points.length;
-  if (n < 2) return { a: 0, b: points[0]?.y || 0, r2: 0, mse: 0, mape: null, yhat: points.map(p => p.y) };
-  const sum = f => points.reduce((s, p) => s + f(p), 0);
-  const sx = sum(p => p.x), sy = sum(p => p.y);
-  const sxx = sum(p => p.x * p.x), sxy = sum(p => p.x * p.y);
-  const denom = (n * sxx - sx * sx) || 1;
-  const a = (n * sxy - sx * sy) / denom;
-  const b = (sy - a * sx) / n;
-  const yhat = points.map(p => a * p.x + b);
-  const ybar = sy / n;
-  const ssRes = points.reduce((s, p, i) => s + Math.pow(p.y - yhat[i], 2), 0);
-  const ssTot = points.reduce((s, p) => s + Math.pow(p.y - ybar, 2), 0) || 1;
-  const mse = ssRes / n;
-  const r2 = 1 - (ssRes / ssTot);
-  const ape = points.filter(p => p.y !== 0).map((p, i) => Math.abs((p.y - yhat[i]) / p.y));
-  const mape = ape.length ? (ape.reduce((s, v) => s + v, 0) / ape.length) : null;
-  return { a, b, r2, mse, mape, yhat };
-}
-
-function buildSyntheticHistory(total, days = 5) {
-  const today = new Date();
-  const weights = Array.from({ length: days }, (_, i) => i + 1);
-  const sumW = weights.reduce((s, w) => s + w, 0);
-  const daily = weights.map(w => Math.round((w / sumW) * total));
-  let diff = total - daily.reduce((s, v) => s + v, 0);
-  let idx = days - 1;
-  while (diff > 0) { daily[idx]++; idx = (idx - 1 + days) % days; diff--; }
-  const history = [];
-  for (let i = days; i >= 1; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    history.push({ date: d.toISOString().slice(0, 10), value: daily[days - i] });
-  }
-  return history;
-}
-
-// Detailed regression endpoint (history + fitted + horizon)
-// --- regression with baseline + out-of-sample holdout (no data leakage) ---
+// ---------------------------- predictive (regression + baseline + holdout) ----------------------------
 router.get('/:id/predict/regression', async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) throw new Error('Invalid dataset id');
 
-    // build daily series (distinct respondents per date)
     const daily = await prisma.$queryRaw`
       SELECT DATE("interviewDate") AS day,
              COUNT(DISTINCT "respondentId")::int AS completed
@@ -530,13 +609,13 @@ router.get('/:id/predict/regression', async (req, res) => {
     let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: String(r.day) }));
     let synthetic = false;
 
-    // synthesize a short plausible history if there are <2 dated points
     if (pts.length < 2) {
+      let total = 0;
       const td = await prisma.$queryRaw`
         SELECT COUNT(DISTINCT "respondentId")::int AS n
         FROM "ResponseFact" WHERE "datasetId" = ${id}
       `;
-      let total = td?.[0]?.n || 0;
+      total = td?.[0]?.n || 0;
       if (total === 0) {
         const est = await prisma.$queryRaw`
           SELECT COUNT(*)::int AS facts,
@@ -545,7 +624,7 @@ router.get('/:id/predict/regression', async (req, res) => {
         `;
         const facts = est?.[0]?.facts || 0;
         const qdim  = est?.[0]?.qdim  || 0;
-        if (qdim > 0) total = Math.round(facts / qdim);
+        if (qdim > 0) total = Math.max(0, Math.round(facts / qdim));
       }
       const days = Math.min(7, Math.max(3, Math.ceil(Math.sqrt(Math.max(2, total)))));
       const weights = Array.from({ length: days }, (_, i) => i + 1);
@@ -561,7 +640,6 @@ router.get('/:id/predict/regression', async (req, res) => {
       synthetic = true;
     }
 
-    // guard against degenerate series (flat or single point)
     const uniqueY = new Set(pts.map(p => p.y)).size;
     const n = pts.length;
     if (n < 2 || uniqueY <= 1) {
@@ -576,7 +654,7 @@ router.get('/:id/predict/regression', async (req, res) => {
       });
     }
 
-    // ---------- fit (in-sample) ----------
+    // OLS fit
     const sum = f => pts.reduce((s, p) => s + f(p), 0);
     const sx = sum(p => p.x), sy = sum(p => p.y);
     const sxx = sum(p => p.x * p.x), sxy = sum(p => p.x * p.y);
@@ -590,18 +668,17 @@ router.get('/:id/predict/regression', async (req, res) => {
     const ssTot = pts.reduce((s, p) => s + Math.pow(p.y - ybar, 2), 0) || 1;
     const mse = ssRes / n;
     const r2  = 1 - (ssRes / ssTot);
+    const rmse = Math.sqrt(mse);
     const mape = (() => {
       const ape = pts.filter((p,i)=>p.y!==0).map((p,i)=>Math.abs((p.y - yhat[i]) / p.y));
       return ape.length ? (ape.reduce((s,v)=>s+v,0)/ape.length) : null;
     })();
 
-    // baseline = mean(y)
     const baselineMSE  = pts.reduce((s,p)=>s+Math.pow(p.y - ybar,2),0) / n;
     const baselineRMSE = Math.sqrt(baselineMSE);
-    const rmse         = Math.sqrt(mse);
     const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
 
-    // ---------- out-of-sample holdout (last 20%, min 2 points) ----------
+    // holdout (last 20%, min 2)
     let oos_rmse = null, oos_mape = null, oos_r2 = null;
     if (!synthetic && n >= 5) {
       const h = Math.max(2, Math.floor(0.2 * n));
@@ -628,19 +705,18 @@ router.get('/:id/predict/regression', async (req, res) => {
       oos_mape = tape.length ? (tape.reduce((s,v)=>s+v,0)/tape.length) : null;
     }
 
-    // ---------- horizon (7 days) ----------
+    // horizon
     const horizon = [];
     const lastDate = new Date(pts[pts.length - 1].date);
-    const lastX    = pts[pts.length - 1].x;
+    const lastX = pts[pts.length - 1].x;
     for (let k = 1; k <= 7; k++) {
       const d = new Date(lastDate); d.setDate(d.getDate() + k);
       const x = lastX + k;
       horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(a * x + b)) });
     }
 
-    // response
     res.json({
-      v: 2,                                 // version flag for sanity checks
+      v: 2,
       dataset_id: id,
       synthetic,
       unit: 'respondents/day',
@@ -660,16 +736,12 @@ router.get('/:id/predict/regression', async (req, res) => {
     res.status(500).json({ message: 'regression_failed', detail: e.message });
   }
 });
+
 // Compatibility alias used by some frontends: /forecast
 router.get('/:id/forecast', async (req, res) => {
   try {
     const id = parseId(req.params.id);
-    const r = await (async () => {
-      const resp = await fetch(`http://localhost:0`); // never called; just to placate linters
-      return null;
-    })().catch(()=>null);
 
-    // Reuse compute from regression endpoint
     const daily = await prisma.$queryRaw`
       SELECT DATE("interviewDate") AS day,
              COUNT(DISTINCT "respondentId")::int AS completed
@@ -686,10 +758,23 @@ router.get('/:id/forecast', async (req, res) => {
         FROM "ResponseFact" WHERE "datasetId" = ${id}
       `;
       const total = totalDistinct?.[0]?.n || 0;
-      const hist = buildSyntheticHistory(total, 5);
+      const today = new Date();
+      const hist = Array.from({ length: 5 }, (_, i) => {
+        const d = new Date(today); d.setDate(d.getDate() - (5 - i));
+        return { date: d.toISOString().slice(0, 10), value: Math.round(total / 5) };
+      });
       pts = hist.map((h, i) => ({ x: i, y: h.value, date: h.date }));
     }
-    const fit = linearFit(pts);
+
+    // simple fit
+    const n = pts.length;
+    const sx = pts.reduce((s,p)=>s+p.x,0);
+    const sy = pts.reduce((s,p)=>s+p.y,0);
+    const sxx= pts.reduce((s,p)=>s+p.x*p.x,0);
+    const sxy= pts.reduce((s,p)=>s+p.x*p.y,0);
+    const denom = (n*sxx - sx*sx) || 1;
+    const a = (n*sxy - sx*sy)/denom;
+    const b = (sy - a*sx)/n;
 
     const horizon = [];
     const lastDate = new Date(pts[pts.length - 1].date);
@@ -697,10 +782,10 @@ router.get('/:id/forecast', async (req, res) => {
     for (let k = 1; k <= 7; k++) {
       const d = new Date(lastDate); d.setDate(d.getDate() + k);
       const x = lastX + k;
-      horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(fit.a * x + fit.b)) });
+      horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(a * x + b)) });
     }
 
-    res.json({ dataset_id: id, metrics: { r2: fit.r2, mse: fit.mse, mape: fit.mape }, horizon });
+    res.json({ dataset_id: id, metrics: {}, horizon });
   } catch (e) {
     console.error('forecast_failed:', e);
     res.status(500).json({ message: 'forecast_failed', detail: e.message });
@@ -726,91 +811,69 @@ router.get('/:id/preview', async (req, res) => {
   }
 });
 
-
-// Add routes for regression models in `backend/routes/dataset.js`
-
-// --- Linear Regression Route ---
+// ---------------------------- Python-backed ML routes (unchanged) ----------------------------
 router.post('/predict/linear-regression', async (req, res) => {
   try {
-    const { datasetId, X_data, y_data } = req.body;  // Assume X_data is features and y_data is target
-
-    // Call Python script to run Linear Regression
-    const pyProcess = spawn('python', ['./etl/linear_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
-    
-    let output = '', errorOutput = '';
-    pyProcess.stdout.on('data', data => { output += data.toString(); });
-    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
-
-    pyProcess.on('close', (code) => {
-      if (code !== 0) {
-        return res.status(500).json({ error: 'Linear Regression failed', detail: errorOutput });
-      }
-
-      const result = JSON.parse(output);
-      res.json({
-        r2: result.r2,
-        mse: result.mse,
-        predictions: result.predictions,
-        chart: result.chart
-      });
+    const { X_data, y_data } = req.body;
+    const py = spawn('python', ['./etl/linear_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
+    let out = '', err = '';
+    py.stdout.on('data', d => out += d.toString());
+    py.stderr.on('data', d => err += d.toString());
+    py.on('close', (code) => {
+      if (code !== 0) return res.status(500).json({ error: 'Linear Regression failed', detail: err });
+      const result = JSON.parse(out);
+      res.json(result);
     });
   } catch (e) {
     res.status(500).json({ error: 'Error in Linear Regression', detail: e.message });
   }
 });
 
-// --- Time Series Forecasting Route (ARIMA) ---
 router.post('/predict/arima', async (req, res) => {
   try {
-    const { datasetId, timeSeriesData } = req.body;
-
-    const pyProcess = spawn('python', ['./etl/arima_forecast.py', '--timeSeriesData', JSON.stringify(timeSeriesData)]);
-
-    let output = '', errorOutput = '';
-    pyProcess.stdout.on('data', data => { output += data.toString(); });
-    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
-
-    pyProcess.on('close', (code) => {
-      if (code !== 0) {
-        return res.status(500).json({ error: 'ARIMA forecasting failed', detail: errorOutput });
-      }
-
-      const forecast = JSON.parse(output);
-      res.json({
-        forecast: forecast,
-        chart: forecast.chart
-      });
+    const { timeSeriesData } = req.body;
+    const py = spawn('python', ['./etl/arima_forecast.py', '--timeSeriesData', JSON.stringify(timeSeriesData)]);
+    let out = '', err = '';
+    py.stdout.on('data', d => out += d.toString());
+    py.stderr.on('data', d => err += d.toString());
+    py.on('close', (code) => {
+      if (code !== 0) return res.status(500).json({ error: 'ARIMA forecasting failed', detail: err });
+      res.json(JSON.parse(out));
     });
   } catch (e) {
     res.status(500).json({ error: 'Error in ARIMA forecasting', detail: e.message });
   }
 });
 
-// --- Logistic Regression Route ---
 router.post('/predict/logistic-regression', async (req, res) => {
   try {
-    const { datasetId, X_data, y_data } = req.body;  // Assume X_data is features and y_data is target
-
-    const pyProcess = spawn('python', ['./etl/logistic_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
-
-    let output = '', errorOutput = '';
-    pyProcess.stdout.on('data', data => { output += data.toString(); });
-    pyProcess.stderr.on('data', data => { errorOutput += data.toString(); });
-
-    pyProcess.on('close', (code) => {
-      if (code !== 0) {
-        return res.status(500).json({ error: 'Logistic Regression failed', detail: errorOutput });
-      }
-
-      const result = JSON.parse(output);
-      res.json({
-        accuracy: result.accuracy,
-        predictions: result.predictions,
-        chart: result.chart
-      });
+    const { X_data, y_data } = req.body;
+    const py = spawn('python', ['./etl/logistic_regression.py', '--X_data', JSON.stringify(X_data), '--y_data', JSON.stringify(y_data)]);
+    let out = '', err = '';
+    py.stdout.on('data', d => out += d.toString());
+    py.stderr.on('data', d => err += d.toString());
+    py.on('close', (code) => {
+      if (code !== 0) return res.status(500).json({ error: 'Logistic Regression failed', detail: err });
+      res.json(JSON.parse(out));
     });
   } catch (e) {
     res.status(500).json({ error: 'Error in Logistic Regression', detail: e.message });
   }
 });
+
+// --- Multer-specific error handler for this router ---
+router.use((err, req, res, next) => {
+  if (err && err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: 'file_too_large',
+        message: `File exceeds ${MAX_UPLOAD_MB} MB limit`,
+        max_mb: MAX_UPLOAD_MB
+      });
+    }
+    return res.status(400).json({ error: 'upload_error', code: err.code, message: err.message });
+  }
+  next(err);
+});
+
 module.exports = router;
