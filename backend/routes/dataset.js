@@ -80,6 +80,33 @@ function normTextToken(s) {
     .toUpperCase();
 }
 
+// ---- Friendly labels for question codes ----
+function toTitleCase(s) {
+  return String(s || '').replace(/\w\S*/g, t => t[0].toUpperCase() + t.slice(1).toLowerCase());
+}
+function friendlyQuestionLabel(code = '') {
+  if (!code) return '';
+  // quick known mappings
+  const shortcuts = { AGE1: 'Age', GENDER: 'Gender' };
+  if (shortcuts[code]) return shortcuts[code];
+
+  let s = String(code).trim();
+
+  // strip noisy prefixes
+  s = s.replace(/^A_+/i, '');
+  s = s.replace(/^Q_+/i, '');
+  s = s.replace(/^A_ISQ_/i, 'ISQ_');
+  s = s.replace(/^A_AllQualifiedResp_?/i, 'Qualified_');
+
+  // make it readable
+  s = s.replace(/__/g, '_').replace(/_/g, ' ');
+  s = s.replace(/DisplayEditParametersH?\s*\d*/gi, ''); // collapse long techy tails
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/([A-Za-z])(\d)/g, '$1 $2'); // split letters+numbers
+
+  s = toTitleCase(s);
+  return s ? `${s} (${code})` : code;
+}
 // --------- OLS helpers (shared by multiple endpoints) ---------
 function olsFit(points) {
   const n = points.length;
@@ -422,7 +449,12 @@ router.get('/:id/questions', async (req, res) => {
       ORDER BY n DESC
       LIMIT 120
     `;
-    res.json({ items: rows || [] });
+    const items = (rows || []).map(r => ({
+      question: r.question,
+      n: r.n,
+      label: friendlyQuestionLabel(r.question)
+    }));
+    res.json({ items });
   } catch (e) {
     console.error('questions_failed:', e);
     res.status(400).json({ message: 'questions_failed', detail: e.message });
@@ -450,7 +482,13 @@ router.get('/:id/questions/with-sample', async (req, res) => {
       ORDER BY n DESC
       LIMIT 120
     `;
-    res.json({ items: rows || [] });
+    const items = (rows || []).map(r => ({
+      question: r.question,
+      n: r.n,
+      sampleText: r.sampletext || r.sampleText || '',
+      label: friendlyQuestionLabel(r.question)
+    }));
+    res.json({ items });
   } catch (e) {
     console.error('questions_sample_failed:', e);
     res.status(400).json({ message: 'questions_sample_failed', detail: e.message });
@@ -840,7 +878,15 @@ router.get('/:id/questions/schema', async (req, res) => {
       let kind = 'text';
       if (fracNum >= 0.4) kind = 'numeric';
       else if (r.uniq_text <= 30 && r.uniq_text > 0) kind = 'categorical';
-      return { question: r.q, total: r.n, numeric_rows: r.n_num, text_rows: r.n_text, unique_text: r.uniq_text, kind };
+      return {
+        question: r.q,
+        label: friendlyQuestionLabel(r.q),
+        total: r.n,
+        numeric_rows: r.n_num,
+        text_rows: r.n_text,
+        unique_text: r.uniq_text,
+        kind
+      };
     });
     res.json({ items });
   } catch (e) {
@@ -1102,7 +1148,7 @@ router.use((err, req, res, next) => {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({
         error: 'file_too_large',
-        message: `File exceeds ${MAX_UPLOAD_MB} MB limit`,
+        meƒssage: `File exceeds ${MAX_UPLOAD_MB} MB limit`,
         max_mb: MAX_UPLOAD_MB
       });
     }

@@ -7,6 +7,26 @@ import RegressionChart from '../../components/charts/RegressionChart';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5050';
 
+function toTitleCase(s) {
+  return String(s || '').replace(/\w\S*/g, t => t[0].toUpperCase() + t.slice(1).toLowerCase());
+}
+function friendlyLabel(code = '') {
+  if (!code) return '';
+  const shortcuts = { AGE1: 'Age', GENDER: 'Gender' };
+  if (shortcuts[code]) return shortcuts[code];
+  let s = String(code).trim();
+  s = s.replace(/^A_+/i, '');
+  s = s.replace(/^Q_+/i, '');
+  s = s.replace(/^A_ISQ_/i, 'ISQ_');
+  s = s.replace(/^A_AllQualifiedResp_?/i, 'Qualified_');
+  s = s.replace(/__/g, '_').replace(/_/g, ' ');
+  s = s.replace(/DisplayEditParametersH?\s*\d*/gi, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/([A-Za-z])(\d)/g, '$1 $2');
+  s = toTitleCase(s);
+  return s ? `${s} (${code})` : code;
+}
+
 export default function PredictiveInsights() {
   const [datasetId, setDatasetId] = useState('');
 
@@ -64,11 +84,14 @@ export default function PredictiveInsights() {
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/questions/schema`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const js = await res.json();
-        setQSchema(js.items || []);
-        const firstNum = (js.items || []).find(x => x.kind === 'numeric')?.question || '';
-        const firstCat = (js.items || []).find(x => x.kind === 'categorical')?.question || '';
-        setQNum(firstNum || '');
-        setQCat(firstCat || '');
+        // ensure each item has a label; sort by label for readability
+        const items = (js.items || []).map(x => ({ ...x, label: x.label || friendlyLabel(x.question) }))
+                                       .sort((a,b) => (a.label || '').localeCompare(b.label || ''));
+        setQSchema(items);
+        const firstNum = items.find(x => x.kind === 'numeric')?.question || '';
+        const firstCat = items.find(x => x.kind === 'categorical')?.question || '';
+        setQNum(firstNum);
+        setQCat(firstCat);
       } catch (e) {
         console.error(e);
         setQSchema([]);
@@ -192,7 +215,7 @@ export default function PredictiveInsights() {
                       onChange={e => setQNum(e.target.value)}>
                 <option value="">— choose numeric —</option>
                 {qSchema.filter(x=>x.kind==='numeric').map(x=>(
-                  <option key={x.question} value={x.question}>{x.question}</option>
+                  <option key={x.question} value={x.question}>{x.label || friendlyLabel(x.question)}</option>
                 ))}
               </select>
               <span className="text-sm">Agg:</span>
@@ -215,7 +238,7 @@ export default function PredictiveInsights() {
                       onChange={e => setQCat(e.target.value)}>
                 <option value="">— choose categorical —</option>
                 {qSchema.filter(x=>x.kind==='categorical').map(x=>(
-                  <option key={x.question} value={x.question}>{x.question}</option>
+                  <option key={x.question} value={x.question}>{x.label || friendlyLabel(x.question)}</option>
                 ))}
               </select>
               <span className="text-sm">Top-K:</span>
@@ -298,7 +321,11 @@ export default function PredictiveInsights() {
           </div>
 
           <Card className="p-4">
-            <div className="text-sm font-medium mb-2">{qNum ? `${qNum} (${numAgg} per ${numInterval})` : 'Choose a numeric question'}</div>
+            <div className="text-sm font-medium mb-2">
+              {qNum
+                ? `${(qSchema.find(x=>x.question===qNum)?.label || friendlyLabel(qNum))} (${numAgg} per ${numInterval})`
+                : 'Choose a numeric question'}
+            </div>
             {numLoading && <div className="text-sm text-zinc-500">Computing…</div>}
             {!numLoading && numErr && <div className="text-sm text-rose-600">Error: {numErr}</div>}
             {!numLoading && !numErr && (!numData?.history?.length)
@@ -313,7 +340,11 @@ export default function PredictiveInsights() {
       {mode === 'categorical' && (
         <>
           <Card className="p-4">
-            <div className="text-sm font-medium mb-2">{qCat ? `${qCat} (${catAsShare ? 'share' : 'count'} per ${catInterval})` : 'Choose a categorical question'}</div>
+            <div className="text-sm font-medium mb-2">
+              {qCat
+                ? `${(qSchema.find(x=>x.question===qCat)?.label || friendlyLabel(qCat))} (${catAsShare ? 'share' : 'count'} per ${catInterval})`
+                : 'Choose a categorical question'}
+            </div>
             {catLoading && <div className="text-sm text-zinc-500">Computing…</div>}
             {!catLoading && catErr && <div className="text-sm text-rose-600">Error: {catErr}</div>}
             {!catLoading && !catErr && (!catData?.labels?.length)
