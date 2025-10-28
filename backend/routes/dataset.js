@@ -6,7 +6,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process'); // <-- required by your ML routes
+const { spawn } = require('child_process'); // ML helpers
 
 const { PrismaClient } = require('@prisma/client');
 const { chooseMapping, readBestSheet } = require('../etl/loader');
@@ -20,7 +20,6 @@ const INSERT_CHUNK = Number(process.env.INSERT_CHUNK || 5000);
 const USE_TX = String(process.env.USE_TX || '0') === '1';
 const SKIP_DUPLICATES = String(process.env.SKIP_DUPLICATES || '1') === '1';
 const UPLOAD_STORAGE = (process.env.UPLOAD_STORAGE || 'disk').toLowerCase(); // 'disk' | 'memory'
-// Completion density threshold (soft fallback). Make it adjustable for defense.
 const COMPLETION_DENSITY_PCT = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
 
 // ---------------------------- upload middlewares ----------------------------
@@ -53,39 +52,93 @@ function parseId(reqParam) {
   if (!Number.isFinite(n)) throw new Error('Invalid dataset id');
   return n;
 }
-
 function readFileToBuffer(file) {
   if (file?.buffer) return file.buffer;
   if (file?.path) return fs.readFileSync(file.path);
   return null;
 }
-
-// Numeric-ish detector for cleaning text tops (and coercing numeric text → number)
+// numeric-ish detector (also used in /qdist)
 function isNumericish(s) {
   if (s === null || s === undefined) return false;
   const t = String(s).trim();
   if (!t) return false;
-  // Allow +/-, thousands separators, decimals, optional percent
   if (/^[+\-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$/.test(t)) return true;
   if (/^[+\-]?\d+(?:\.\d+)?%?$/.test(t)) return true;
   return false;
 }
-
 function coerceNumeric(s) {
   const t = String(s || '').trim();
   if (!isNumericish(t)) return null;
-  // Keep as “human scale” (50% -> 50) for bins that match what users expect
   const cleaned = t.replace(/[ ,%]/g, '');
   const v = Number(cleaned);
   return Number.isFinite(v) ? v : null;
 }
-
-// Light text normalizer to consolidate tokens
 function normTextToken(s) {
   return String(s || '')
     .replace(/\s+/g, ' ')
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
     .toUpperCase();
+}
+
+// --------- OLS helpers (shared by multiple endpoints) ---------
+function olsFit(points) {
+  const n = points.length;
+  const sx = points.reduce((s,p)=>s+p.x,0);
+  const sy = points.reduce((s,p)=>s+p.y,0);
+  const sxx= points.reduce((s,p)=>s+p.x*p.x,0);
+  const sxy= points.reduce((s,p)=>s+p.x*p.y,0);
+  const denom = (n * sxx - sx * sx) || 1;
+  const a = (n * sxy - sx * sy) / denom;
+  const b = (sy - a * sx) / n;
+  const yhat = points.map(p => a * p.x + b);
+  const ybar = sy / n;
+
+  const yhatClamp = yhat.map(v => Math.max(0, v)); // we don’t want negative forecasts
+
+  const mse   = points.reduce((s,p,i)=> s + Math.pow(p.y - yhatClamp[i], 2), 0) / n;
+  const rmse  = Math.sqrt(mse);
+  const ssRes = points.reduce((s,p,i)=> s + Math.pow(p.y - yhatClamp[i], 2), 0);
+  const ssTot = points.reduce((s,p)=> s + Math.pow(p.y - ybar, 2), 0) || 1;
+  const r2    = 1 - (ssRes / ssTot);
+
+  const baselineMSE  = points.reduce((s,p)=> s + Math.pow(p.y - ybar, 2), 0) / n;
+  const baselineRMSE = Math.sqrt(baselineMSE);
+  const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
+
+  const EPS = 1e-9;
+  const mae  = points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0) / n;
+  const wape = (points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0)) / ((points.reduce((s,p)=> s + Math.abs(p.y), 0)) || 1);
+
+  // classic MAPE (skips zeros) – this is what can blow up to 193%+ when actuals are small
+  const mapeArr = points.map((p,i)=> p.y !== 0 ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
+  const mape    = mapeArr.length ? (mapeArr.reduce((s,v)=>s+v,0)/mapeArr.length) : null;
+
+  // MAPE with denominator floor (ignore points with very small actuals)
+  const MAPE_FLOOR = 5;
+  const mapeFloorArr = points.map((p,i)=> p.y >= MAPE_FLOOR ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
+  const mape_floor5 = mapeFloorArr.length ? (mapeFloorArr.reduce((s,v)=>s+v,0)/mapeFloorArr.length) : null;
+
+  // sMAPE (bounded 0..2) – much easier to defend in low-count regimes
+  const smapeArr = points.map((p,i)=>{
+    const denom = Math.abs(p.y) + Math.abs(yhatClamp[i]) + EPS;
+    return (2 * Math.abs(p.y - yhatClamp[i])) / denom;
+  });
+  const smape = smapeArr.reduce((s,v)=>s+v,0)/smapeArr.length;
+
+  return { a, b, yhat: yhatClamp, r2, mse, rmse, baselineMSE, baselineRMSE, improvement, mae, wape, mape, mape_floor5, smape };
+}
+function makeHorizon(lastDateISO, lastX, a, b, steps=7, interval='day') {
+  const out = [];
+  const base = new Date(lastDateISO);
+  for (let k=1; k<=steps; k++) {
+    const d = new Date(base);
+    if (interval === 'week') d.setDate(d.getDate() + 7*k);
+    else if (interval === 'month') d.setMonth(d.getMonth() + k);
+    else d.setDate(d.getDate() + k);
+    const x = lastX + k;
+    out.push({ date: d.toISOString().slice(0,10), projected: Math.max(0, Math.round(a*x + b)) });
+  }
+  return out;
 }
 
 // ---------------------------- list ----------------------------
@@ -179,14 +232,14 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
     }
     tick(`transformed to facts=${facts.length} (issues=${issues.length})`);
 
-    // deduplicate raw/clean JSON per respondent+date (massive write reduction)
+    // deduplicate raw/clean JSON per respondent+date
     const firstJsonForKey = new Set();
     const keyOf = (f) => {
       const d = f.interviewDate ? new Date(f.interviewDate).toISOString().slice(0,10) : '';
       return `${f.respondentId}||${d}`;
     };
 
-    // insert in batches, optionally in one transaction
+    // insert in batches
     const doInsertBatches = async (client) => {
       for (let i = 0; i < facts.length; i += INSERT_CHUNK) {
         const chunk = facts.slice(i, i + INSERT_CHUNK);
@@ -287,7 +340,7 @@ router.get('/:id/summary', async (req, res) => {
 
     const fact_count = await prisma.responseFact.count({ where: { datasetId: id } });
 
-    // HARD completion: dated or explicit flag
+    // HARD completion
     const completedHard = await prisma.$queryRaw`
       SELECT COUNT(DISTINCT "respondentId")::int AS n
       FROM "ResponseFact"
@@ -307,7 +360,7 @@ router.get('/:id/summary', async (req, res) => {
     `;
     const hard = completedHard?.[0]?.n || 0;
 
-    // SOFT completion: density >= COMPLETION_DENSITY_PCT * max(per-respondent facts)
+    // SOFT completion (density rule)
     const soft = hard > 0 ? 0 : (await prisma.$queryRaw`
       WITH per AS (
         SELECT "respondentId", COUNT(*)::int AS c
@@ -404,7 +457,7 @@ router.get('/:id/questions/with-sample', async (req, res) => {
   }
 });
 
-// ---------- CLEANED QDIST (numeric coercion + text de-noising) ----------
+// ---------- CLEANED QDIST ----------
 router.get('/:id/qdist', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -417,7 +470,6 @@ router.get('/:id/qdist', async (req, res) => {
       take: 100000
     });
 
-    // Build numeric series (include numeric-like strings from answerText)
     const nums = [];
     for (const r of rows) {
       if (r.answerNum !== null && r.answerNum !== undefined) {
@@ -429,19 +481,17 @@ router.get('/:id/qdist', async (req, res) => {
       }
     }
 
-    // Build cleaned text series (exclude numeric-only strings)
     const stop = new Set(['', 'N/A', 'NA', 'NONE', 'NULL', 'UNSPECIFIED', 'UNASSIGNED', '—', '-', 'NCL']);
     const texts = [];
     for (const r of rows) {
       const raw = (r.answerText ?? '').toString().trim();
       if (!raw) continue;
-      if (isNumericish(raw)) continue; // keep digits out of text tops
+      if (isNumericish(raw)) continue;
       const token = normTextToken(raw);
       if (!token || token.length < 2 || stop.has(token)) continue;
       texts.push(token);
     }
 
-    // Numeric hist: 6..25 bins using sqrt rule (bounded)
     const numeric_bins = [];
     if (nums.length) {
       const min = Math.min(...nums), max = Math.max(...nums);
@@ -450,13 +500,11 @@ router.get('/:id/qdist', async (req, res) => {
       for (let i = 0; i < k; i++) {
         const lo = min + i * step;
         const hi = (i === k - 1) ? max : lo + step;
-        // left-open except first bin to avoid double counts on edges
         const cnt = nums.reduce((s, v) => s + ((i === 0 ? v >= lo : v > lo) && v <= hi ? 1 : 0), 0);
         numeric_bins.push({ lo, hi, count: cnt });
       }
     }
 
-    // Text top 50
     const tf = new Map();
     for (const t of texts) tf.set(t, (tf.get(t) || 0) + 1);
     const text_top = Array.from(tf.entries())
@@ -592,7 +640,7 @@ router.get('/:id/completion/by-interviewer', async (req, res) => {
   }
 });
 
-// ---------------------------- predictive (regression + baseline + holdout) ----------------------------
+// ---------------------------- predictive (respondents/day regression + better metrics) ----------------------------
 router.get('/:id/predict/regression', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -644,91 +692,71 @@ router.get('/:id/predict/regression', async (req, res) => {
     const n = pts.length;
     if (n < 2 || uniqueY <= 1) {
       return res.json({
-        v: 2,
+        v: 3,
         dataset_id: id,
         synthetic,
         unit: 'respondents/day',
-        metrics: { r2: null, mse: 0, rmse: 0, baseline_mse: null, baseline_rmse: null, improvement_vs_baseline: null, mape: null, oos_rmse: null, oos_mape: null, oos_r2: null },
+        metrics: {
+          r2: null, mse: 0, rmse: 0,
+          baseline_mse: null, baseline_rmse: null, improvement_vs_baseline: null,
+          mae: null, wape: null, mape: null, mape_floor5: null, smape: null,
+          oos_rmse: null, oos_mape: null, oos_smape: null, oos_r2: null
+        },
         history: pts.map(p => ({ date: p.date, actual: p.y, fitted: p.y })),
         horizon: []
       });
     }
 
-    // OLS fit
-    const sum = f => pts.reduce((s, p) => s + f(p), 0);
-    const sx = sum(p => p.x), sy = sum(p => p.y);
-    const sxx = sum(p => p.x * p.x), sxy = sum(p => p.x * p.y);
-    const denom = (n * sxx - sx * sx) || 1;
-    const a = (n * sxy - sx * sy) / denom;
-    const b = (sy - a * sx) / n;
-    const yhat = pts.map(p => a * p.x + b);
-    const ybar = sy / n;
-
-    const ssRes = pts.reduce((s, p, i) => s + Math.pow(p.y - yhat[i], 2), 0);
-    const ssTot = pts.reduce((s, p) => s + Math.pow(p.y - ybar, 2), 0) || 1;
-    const mse = ssRes / n;
-    const r2  = 1 - (ssRes / ssTot);
-    const rmse = Math.sqrt(mse);
-    const mape = (() => {
-      const ape = pts.filter((p,i)=>p.y!==0).map((p,i)=>Math.abs((p.y - yhat[i]) / p.y));
-      return ape.length ? (ape.reduce((s,v)=>s+v,0)/ape.length) : null;
-    })();
-
-    const baselineMSE  = pts.reduce((s,p)=>s+Math.pow(p.y - ybar,2),0) / n;
-    const baselineRMSE = Math.sqrt(baselineMSE);
-    const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
+    const fit = olsFit(pts);
 
     // holdout (last 20%, min 2)
-    let oos_rmse = null, oos_mape = null, oos_r2 = null;
+    let oos = { rmse: null, mape: null, smape: null, r2: null };
     if (!synthetic && n >= 5) {
       const h = Math.max(2, Math.floor(0.2 * n));
       const train = pts.slice(0, n - h);
       const test  = pts.slice(n - h);
 
-      const tsx = train.reduce((s,p)=>s+p.x,0);
-      const tsy = train.reduce((s,p)=>s+p.y,0);
-      const tsxx= train.reduce((s,p)=>s+p.x*p.x,0);
-      const tsxy= train.reduce((s,p)=>s+p.x*p.y,0);
-      const tden= (train.length * tsxx - tsx*tsx) || 1;
-      const ta  = (train.length * tsxy - tsx*tsy) / tden;
-      const tb  = (tsy - ta * tsx) / train.length;
-
+      const tfit = olsFit(train);
       const testY    = test.map(p => p.y);
-      const testYhat = test.map(p => ta * p.x + tb);
+      const testYhat = test.map((p,i) => Math.max(0, tfit.a * p.x + tfit.b));
+
+      const tmse  = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0) / test.length;
+      const trmse = Math.sqrt(tmse);
+
+      const tmapeArr = testY.map((v,i)=> v !== 0 ? Math.abs((v - testYhat[i]) / v) : null).filter(v=>v!==null);
+      const tmape    = tmapeArr.length ? (tmapeArr.reduce((s,v)=>s+v,0)/tmapeArr.length) : null;
+
+      const EPS = 1e-9;
+      const tsmapeArr= testY.map((v,i)=>{
+        const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
+        return (2 * Math.abs(v - testYhat[i])) / denom;
+      });
+      const tsmape = tsmapeArr.reduce((s,v)=>s+v,0) / tsmapeArr.length;
+
       const tybar = testY.reduce((s,v)=>s+v,0) / test.length;
+      const tssRes = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0);
+      const tssTot = testY.reduce((s,v)=> s + Math.pow(v - tybar, 2), 0) || 1;
+      const tr2    = 1 - (tssRes / tssTot);
 
-      const tssRes = testY.reduce((s,v,i)=>s+Math.pow(v - testYhat[i],2),0);
-      const tssTot = testY.reduce((s,v)=>s+Math.pow(v - tybar,2),0) || 1;
-      oos_rmse = Math.sqrt(tssRes / test.length);
-      oos_r2   = 1 - (tssRes / tssTot);
-      const tape = testY.filter((v,i)=>v!==0).map((v,i)=>Math.abs((v - testYhat[i])/v));
-      oos_mape = tape.length ? (tape.reduce((s,v)=>s+v,0)/tape.length) : null;
+      oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2 };
     }
 
-    // horizon
-    const horizon = [];
-    const lastDate = new Date(pts[pts.length - 1].date);
-    const lastX = pts[pts.length - 1].x;
-    for (let k = 1; k <= 7; k++) {
-      const d = new Date(lastDate); d.setDate(d.getDate() + k);
-      const x = lastX + k;
-      horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(a * x + b)) });
-    }
+    const horizon = makeHorizon(pts[pts.length - 1].date, pts[pts.length - 1].x, fit.a, fit.b, 7, 'day');
 
     res.json({
-      v: 2,
+      v: 3,
       dataset_id: id,
       synthetic,
       unit: 'respondents/day',
       metrics: {
-        r2, mse, rmse,
-        baseline_mse: baselineMSE,
-        baseline_rmse: baselineRMSE,
-        improvement_vs_baseline: improvement,
-        mape,
-        oos_rmse, oos_mape, oos_r2
+        r2: fit.r2, mse: fit.mse, rmse: fit.rmse,
+        baseline_mse: fit.baselineMSE, baseline_rmse: fit.baselineRMSE,
+        improvement_vs_baseline: fit.improvement,
+        mae: fit.mae, wape: fit.wape,
+        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape,
+        oos_rmse: oos.rmse, oos_mape: oos.mape, oos_smape: oos.smape, oos_r2: oos.r2
       },
-      history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(yhat[i])) })),
+      history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
       horizon
     });
   } catch (e) {
@@ -766,7 +794,6 @@ router.get('/:id/forecast', async (req, res) => {
       pts = hist.map((h, i) => ({ x: i, y: h.value, date: h.date }));
     }
 
-    // simple fit
     const n = pts.length;
     const sx = pts.reduce((s,p)=>s+p.x,0);
     const sy = pts.reduce((s,p)=>s+p.y,0);
@@ -776,19 +803,227 @@ router.get('/:id/forecast', async (req, res) => {
     const a = (n*sxy - sx*sy)/denom;
     const b = (sy - a*sx)/n;
 
-    const horizon = [];
-    const lastDate = new Date(pts[pts.length - 1].date);
-    const lastX = pts[pts.length - 1].x;
-    for (let k = 1; k <= 7; k++) {
-      const d = new Date(lastDate); d.setDate(d.getDate() + k);
-      const x = lastX + k;
-      horizon.push({ date: d.toISOString().slice(0, 10), projected: Math.max(0, Math.round(a * x + b)) });
-    }
+    const horizon = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, a, b, 7, 'day');
 
     res.json({ dataset_id: id, metrics: {}, horizon });
   } catch (e) {
     console.error('forecast_failed:', e);
     res.status(500).json({ message: 'forecast_failed', detail: e.message });
+  }
+});
+
+// ===== QUESTION-LEVEL PREDICTIVE =====
+
+// 1) auto-classify questions by type
+router.get('/:id/questions/schema', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const rows = await prisma.$queryRaw`
+      WITH b AS (
+        SELECT "questionCode" AS q,
+               COUNT(*)::int AS n,
+               COUNT("answerNum")::int AS n_num,
+               COUNT(NULLIF(TRIM(COALESCE("answerText",'')),''))::int AS n_text,
+               COUNT(DISTINCT TRIM(UPPER(REGEXP_REPLACE(COALESCE("answerText",''), '\\s+', ' ', 'g'))))::int AS uniq_text
+        FROM "ResponseFact"
+        WHERE "datasetId" = ${id}
+        GROUP BY "questionCode"
+      )
+      SELECT q, n, n_num, n_text, uniq_text
+      FROM b
+      WHERE q IS NOT NULL
+      ORDER BY n DESC
+      LIMIT 400
+    `;
+    const items = (rows || []).map(r => {
+      const fracNum = r.n ? r.n_num / r.n : 0;
+      let kind = 'text';
+      if (fracNum >= 0.4) kind = 'numeric';
+      else if (r.uniq_text <= 30 && r.uniq_text > 0) kind = 'categorical';
+      return { question: r.q, total: r.n, numeric_rows: r.n_num, text_rows: r.n_text, unique_text: r.uniq_text, kind };
+    });
+    res.json({ items });
+  } catch (e) {
+    console.error('questions_schema_failed:', e);
+    res.status(400).json({ message: 'questions_schema_failed', detail: e.message });
+  }
+});
+
+// 2) numeric question forecast
+// GET /api/dataset/:id/predict/question/numeric?questionCode=Q1&agg=sum|avg|count&interval=day|week|month
+router.get('/:id/predict/question/numeric', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const q  = String(req.query.questionCode || '').trim();
+    const agg = (String(req.query.agg || 'avg').toLowerCase());
+    const interval = (String(req.query.interval || 'day').toLowerCase());
+    if (!q) return res.status(400).json({ error: 'questionCode required' });
+    if (!['sum','avg','count'].includes(agg)) return res.status(400).json({ error: 'agg must be sum|avg|count' });
+    if (!['day','week','month'].includes(interval)) return res.status(400).json({ error: 'interval must be day|week|month' });
+
+    const bucketExpr = interval === 'week' ? `DATE_TRUNC('week',"interviewDate")`
+                      : interval === 'month' ? `DATE_TRUNC('month',"interviewDate")`
+                      : `DATE_TRUNC('day',"interviewDate")`;
+
+    const rows = await prisma.$queryRawUnsafe(`
+      WITH base AS (
+        SELECT
+          ${bucketExpr}::date AS d,
+          CASE
+            WHEN "answerNum" IS NOT NULL THEN "answerNum"
+            WHEN "answerText" ~ '^[\\s]*[+\\-]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?\\s*%?[\\s]*$'
+              THEN REGEXP_REPLACE(LOWER("answerText"), '[,%]', '', 'g')::numeric
+            ELSE NULL
+          END AS val
+        FROM "ResponseFact"
+        WHERE "datasetId" = $1 AND "questionCode" = $2 AND "interviewDate" IS NOT NULL
+      )
+      SELECT d::date AS day,
+             COUNT(val) FILTER (WHERE val IS NOT NULL)::int AS n,
+             SUM(val)::float8 AS sum,
+             AVG(val)::float8 AS avg
+      FROM base
+      GROUP BY day
+      ORDER BY day
+    `, id, q);
+
+    if (!rows || rows.length === 0) {
+      return res.json({ dataset_id: id, question: q, interval, agg, history: [], horizon: [], metrics: {}, synthetic: true });
+    }
+
+    const series = rows.map(r => ({
+      date: String(r.day),
+      y: agg === 'sum' ? Number(r.sum || 0)
+         : agg === 'count' ? Number(r.n || 0)
+         : Number(r.avg || 0)
+    })).filter(r => Number.isFinite(r.y));
+
+    const pts = series.map((r,i)=>({ x:i, y:r.y, date:r.date }));
+    if (pts.length < 2 || new Set(pts.map(p=>p.y)).size <= 1) {
+      return res.json({
+        dataset_id: id, question: q, agg, interval, synthetic: false,
+        metrics: { r2:null, rmse:0, mape:null, smape:null, mape_floor5:null, baseline_rmse:null, improvement_vs_baseline:null },
+        history: pts.map(p => ({ date: p.date, actual: p.y, fitted: p.y })),
+        horizon: []
+      });
+    }
+
+    const fit = olsFit(pts);
+    const horizon = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, fit.a, fit.b, 7, interval);
+
+    res.json({
+      dataset_id: id, question: q, agg, interval,
+      synthetic: false,
+      metrics: {
+        r2: fit.r2, mse: fit.mse, rmse: fit.rmse,
+        baseline_rmse: fit.baselineRMSE,
+        improvement_vs_baseline: fit.improvement,
+        mae: fit.mae, wape: fit.wape,
+        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape
+      },
+      history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
+      horizon
+    });
+  } catch (e) {
+    console.error('q_numeric_forecast_failed:', e);
+    res.status(500).json({ message: 'q_numeric_forecast_failed', detail: e.message });
+  }
+});
+
+// 3) categorical/text question forecast
+// GET /api/dataset/:id/predict/question/categorical?questionCode=Q1&top_k=5&interval=day|week|month&as_share=0|1
+router.get('/:id/predict/question/categorical', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const q  = String(req.query.questionCode || '').trim();
+    const topK = Math.max(1, Math.min(10, Number(req.query.top_k || 5)));
+    const interval = (String(req.query.interval || 'day').toLowerCase());
+    const asShare = String(req.query.as_share || '0') === '1';
+    if (!q) return res.status(400).json({ error: 'questionCode required' });
+    if (!['day','week','month'].includes(interval)) return res.status(400).json({ error: 'interval must be day|week|month' });
+
+    const bucketExpr = interval === 'week' ? `DATE_TRUNC('week',"interviewDate")`
+                      : interval === 'month' ? `DATE_TRUNC('month',"interviewDate")`
+                      : `DATE_TRUNC('day',"interviewDate")`;
+
+    const topLabels = await prisma.$queryRawUnsafe(`
+      WITH base AS (
+        SELECT TRIM(UPPER(REGEXP_REPLACE(COALESCE("answerText",''), '\\s+', ' ', 'g'))) AS label
+        FROM "ResponseFact"
+        WHERE "datasetId" = $1 AND "questionCode" = $2
+          AND "interviewDate" IS NOT NULL
+          AND "answerText" IS NOT NULL
+          AND NOT ("answerText" ~ '^[\\s]*[+\\-]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?\\s*%?[\\s]*$')
+      )
+      SELECT label, COUNT(*)::int AS c
+      FROM base
+      WHERE label <> ''
+      GROUP BY label
+      ORDER BY c DESC
+      LIMIT $3
+    `, id, q, topK);
+    if (!topLabels || topLabels.length === 0) {
+      return res.json({ dataset_id: id, question: q, interval, top_k: topK, series: {}, horizon: {}, synthetic: false, labels: [] });
+    }
+    const labels = topLabels.map(r => r.label);
+
+    const rows = await prisma.$queryRawUnsafe(`
+      WITH base AS (
+        SELECT
+          ${bucketExpr}::date AS d,
+          TRIM(UPPER(REGEXP_REPLACE(COALESCE("answerText",''), '\\s+', ' ', 'g'))) AS label
+        FROM "ResponseFact"
+        WHERE "datasetId" = $1 AND "questionCode" = $2
+          AND "interviewDate" IS NOT NULL
+          AND "answerText" IS NOT NULL
+          AND NOT ("answerText" ~ '^[\\s]*[+\\-]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?\\s*%?[\\s]*$')
+      ),
+      tot AS ( SELECT d, COUNT(*)::int AS total FROM base GROUP BY d ),
+      fil AS ( SELECT * FROM base WHERE label = ANY($3::text[]) )
+      SELECT f.d::date AS day, f.label, COUNT(*)::int AS c, t.total
+      FROM fil f
+      JOIN tot t ON t.d = f.d
+      GROUP BY f.d, f.label, t.total
+      ORDER BY f.d, f.label
+    `, id, q, labels);
+
+    const byLabel = new Map();
+    for (const L of labels) byLabel.set(L, []);
+    for (const r of rows) {
+      const y = asShare ? (r.total ? (r.c / r.total) : 0) : r.c;
+      byLabel.get(r.label).push({ date: String(r.day), y: Number(y) });
+    }
+
+    const series = {};
+    const horizon = {};
+    const metrics = {};
+    for (const L of labels) {
+      const arr = byLabel.get(L) || [];
+      const pts = arr.map((r,i)=>({ x:i, y:r.y, date:r.date }));
+      if (pts.length < 2 || new Set(pts.map(p=>p.y)).size <= 1) {
+        series[L] = pts.map(p=>({ date:p.date, actual:p.y, fitted:p.y }));
+        horizon[L] = [];
+        metrics[L] = { r2:null, rmse:0, mape:null, smape:null, mape_floor5:null, baseline_rmse:null, improvement_vs_baseline:null };
+        continue;
+      }
+      const fit = olsFit(pts);
+      series[L] = pts.map((p,i)=>({ date:p.date, actual:p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) }));
+      horizon[L] = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, fit.a, fit.b, 7, interval)
+                     .map(h => ({ ...h, projected: asShare ? Math.min(1, h.projected) : h.projected }));
+      metrics[L] = {
+        r2: fit.r2, rmse: fit.rmse, mse: fit.mse,
+        baseline_rmse: fit.baselineRMSE, improvement_vs_baseline: fit.improvement,
+        mae: fit.mae, wape: fit.wape, mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape
+      };
+    }
+
+    res.json({
+      dataset_id: id, question: q, interval, top_k: topK, as_share: asShare ? 1 : 0,
+      labels, series, horizon, metrics
+    });
+  } catch (e) {
+    console.error('q_categorical_forecast_failed:', e);
+    res.status(500).json({ message: 'q_categorical_forecast_failed', detail: e.message });
   }
 });
 
