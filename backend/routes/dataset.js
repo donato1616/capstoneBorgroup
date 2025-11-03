@@ -79,6 +79,33 @@ function normTextToken(s) {
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
     .toUpperCase();
 }
+// ---- Friendly labels for question codes ----
+function toTitleCase(s) {
+  return String(s || '').replace(/\w\S*/g, t => t[0].toUpperCase() + t.slice(1).toLowerCase());
+}
+function friendlyQuestionLabel(code = '') {
+  if (!code) return '';
+  // quick known mappings
+  const shortcuts = { AGE1: 'Age', GENDER: 'Gender' };
+  if (shortcuts[code]) return shortcuts[code];
+
+  let s = String(code).trim();
+
+  // strip noisy prefixes
+  s = s.replace(/^A_+/i, '');
+  s = s.replace(/^Q_+/i, '');
+  s = s.replace(/^A_ISQ_/i, 'ISQ_');
+  s = s.replace(/^A_AllQualifiedResp_?/i, 'Qualified_');
+
+  // make it readable
+  s = s.replace(/__/g, '_').replace(/_/g, ' ');
+  s = s.replace(/DisplayEditParametersH?\s*\d*/gi, ''); // collapse long techy tails
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/([A-Za-z])(\d)/g, '$1 $2'); // split letters+numbers
+
+  s = toTitleCase(s);
+  return s ? `${s} (${code})` : code;
+}
 
 // ---- Friendly labels for question codes ----
 function toTitleCase(s) {
@@ -852,7 +879,6 @@ router.get('/:id/forecast', async (req, res) => {
 
 // ===== QUESTION-LEVEL PREDICTIVE =====
 
-// 1) auto-classify questions by type
 router.get('/:id/questions/schema', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -894,7 +920,6 @@ router.get('/:id/questions/schema', async (req, res) => {
     res.status(400).json({ message: 'questions_schema_failed', detail: e.message });
   }
 });
-
 // 2) numeric question forecast
 // GET /api/dataset/:id/predict/question/numeric?questionCode=Q1&agg=sum|avg|count&interval=day|week|month
 router.get('/:id/predict/question/numeric', async (req, res) => {
