@@ -6,10 +6,13 @@ import UploadData from "../../components/UploadData";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
-/**
- * Props:
- *   selectedDataset: string (UUID or legacy id) - REQUIRED
- */
+// 🔑 Map what your app passes as selectedDataset to the public/viz key
+const DATASET_KEY_BY_ID = {
+  28: "fsr_taiwan_2024",
+  "EBRS-FSR-2024": "fsr_taiwan_2024",
+  // add more datasets here as needed
+};
+
 export default function Overview({ selectedDataset }) {
   const [analytics, setAnalytics] = useState({ descriptive: null, predictive: null, prescriptive: null });
   const [loading, setLoading] = useState(false);
@@ -43,17 +46,26 @@ export default function Overview({ selectedDataset }) {
     ? new Date(analytics.descriptive.computed_at).toLocaleString()
     : "—";
   const total = kpis.rows ?? null;
+
+  // Resolve dataset key from id or slug
+  const datasetKey =
+    DATASET_KEY_BY_ID[String(selectedDataset)] ??
+    DATASET_KEY_BY_ID[Number(selectedDataset)] ??
+    null;
+
+  // Static image path for FSR Taiwan
+  const totalResponsesImg =
+    datasetKey === "fsr_taiwan_2024"
+      ? "/viz/fsr_taiwan_2024/completion_trend/total_responses.png"
+      : null;
+
   const topRegions = Array.isArray(kpis.top_regions) ? kpis.top_regions : [];
 
   return (
     <div className="space-y-6">
-      {err && (
-        <div className="chip bg-amber-50 border-amber-300 text-amber-800">
-          {err}
-        </div>
-      )}
+      {err && <div className="chip bg-amber-50 border-amber-300 text-amber-800">{err}</div>}
 
-      {/* Filters (UI only for now) */}
+      {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <Filter label="Client" /><Filter label="Project" />
         <Filter label="Survey" /><Filter label="Date Range" />
@@ -61,7 +73,18 @@ export default function Overview({ selectedDataset }) {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPI label="Total Responses" value={loading ? "…" : fmt(total)} sub={`Last sync: ${lastSync}`} />
+        <Card className="p-4">
+          {totalResponsesImg && (
+            <StaticImageCard
+              title="Total Responses"
+              src={`${totalResponsesImg}?v=4`} // cache-buster
+              alt="FSR Taiwan — Total Responses"
+              height="h-28"
+              noMargin
+            />
+          )}
+        </Card>
+
         <KPI label="Completion Rate" value="—" sub="Target: 85%" />
         <KPI label="Error Rate" value="—" sub="(coming from QA checks)" />
         <KPI label="Active Researchers" value="—" sub="(coming soon)" />
@@ -103,7 +126,7 @@ export default function Overview({ selectedDataset }) {
         </Card>
       </div>
 
-      {/* Upload Data (bottom) */}
+      {/* Upload Data */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <UploadData />
       </div>
@@ -117,6 +140,24 @@ function ChartBox({ title }) {
       <div className="text-sm font-medium mb-3">{title}</div>
       <div className="h-full grid place-items-center text-zinc-400">
         <div className="rounded-xl border border-dashed px-4 py-2 text-xs">Chart placeholder</div>
+      </div>
+    </div>
+  );
+}
+
+/** Left-aligned, compact static image (no stretching) */
+function StaticImageCard({ title, src, alt, height = "h-28", noMargin = false }) {
+  return (
+    <div className={`${noMargin ? "" : "mt-1"}`}>
+      <div className="px-1 pb-1 text-[12px] font-medium text-zinc-600">{title}</div>
+      {/* Left-aligned: no mx-auto, no justify-center */}
+      <div className={`${height} max-w-[360px] overflow-hidden`}>
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto" }}
+        />
       </div>
     </div>
   );
