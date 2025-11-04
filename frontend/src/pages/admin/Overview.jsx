@@ -53,11 +53,14 @@ export default function Overview({ selectedDataset }) {
     DATASET_KEY_BY_ID[Number(selectedDataset)] ??
     null;
 
-  // Static image path for FSR Taiwan
-  const totalResponsesImg =
-    datasetKey === "fsr_taiwan_2024"
-      ? "/viz/fsr_taiwan_2024/completion_trend/total_responses.png"
-      : null;
+  // Static images for FSR Taiwan
+  const showImages = datasetKey === "fsr_taiwan_2024";
+  const totalResponsesImg = showImages
+    ? "/viz/fsr_taiwan_2024/completion_trend/total_responses.png"
+    : null;
+  const completionRateImg = showImages
+    ? "/viz/fsr_taiwan_2024/completion_trend/completion_rate.png"
+    : null;
 
   const topRegions = Array.isArray(kpis.top_regions) ? kpis.top_regions : [];
 
@@ -71,21 +74,36 @@ export default function Overview({ selectedDataset }) {
         <Filter label="Survey" /><Filter label="Date Range" />
       </div>
 
-      {/* KPI cards */}
+      {/* KPI / Static image row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="p-4">
           {totalResponsesImg && (
             <StaticImageCard
               title="Total Responses"
-              src={`${totalResponsesImg}?v=4`} // cache-buster
+              src={`${totalResponsesImg}?v=1`} // cache-buster
               alt="FSR Taiwan — Total Responses"
               height="h-28"
               noMargin
             />
           )}
+          {!totalResponsesImg && (
+            <KPI label="Total Responses" value={loading ? "…" : fmt(total)} sub={`Last sync: ${lastSync}`} />
+          )}
         </Card>
 
-        <KPI label="Completion Rate" value="—" sub="Target: 85%" />
+        <Card className="p-4">
+          {completionRateImg && (
+            <StaticImageCard
+              title="Completion Rate"
+              src={`${completionRateImg}?v=1`} // cache-buster
+              alt="FSR Taiwan — Completion Rate"
+              height="h-28"
+              noMargin
+            />
+          )}
+          {!completionRateImg && <KPI label="Completion Rate" value="—" sub="Target: 85%" />}
+        </Card>
+
         <KPI label="Error Rate" value="—" sub="(coming from QA checks)" />
         <KPI label="Active Researchers" value="—" sub="(coming soon)" />
       </div>
@@ -150,7 +168,6 @@ function StaticImageCard({ title, src, alt, height = "h-28", noMargin = false })
   return (
     <div className={`${noMargin ? "" : "mt-1"}`}>
       <div className="px-1 pb-1 text-[12px] font-medium text-zinc-600">{title}</div>
-      {/* Left-aligned: no mx-auto, no justify-center */}
       <div className={`${height} max-w-[360px] overflow-hidden`}>
         <img
           src={src}
