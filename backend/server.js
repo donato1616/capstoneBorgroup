@@ -2,14 +2,23 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path'); // added
+const fs = require('fs'); // <-- NEW
 const { PrismaClient } = require('@prisma/client');
 const auditRoute = require('./routes/audit');
-
-
 const datasetRoute = require('./routes/dataset');
-
 const app = express();
 const prisma = new PrismaClient();
+
+// ✅ resolve to <repo_root>/data (one level up from /backend)
+const DATA_DIR = path.resolve(__dirname, '..', 'data');
+
+// tiny sanity log on startup
+if (!fs.existsSync(DATA_DIR)) {
+  console.warn('[data] directory not found at', DATA_DIR);
+} else {
+  console.log('[data] serving static from', DATA_DIR);
+}
 
 // ---- Config ----
 const PORT = Number(process.env.PORT || 5050);
@@ -44,6 +53,17 @@ app.use('/api/audit', auditRoute);
 
 // ---- Body parsing ----
 app.use(express.json({ limit: '10mb' }));
+
+// ---- Serve static analytics/data and KPI routes ----
+app.use('/analytics_out', express.static(path.join(process.cwd(), 'analytics_out')));
+
+// serve /data from repo root (resolve absolute path to repo_root/data)
+app.use('/data', express.static(DATA_DIR));
+
+// also serve backend/data as a fallback (keeps backend-local files available)
+app.use('/data', express.static(path.join(process.cwd(), 'backend', 'data')));
+
+app.use('/api/kpi', require('./routes/kpi'));
 
 // ---- Health ----
 app.get('/health', (_req, res) => res.json({ ok: true }));

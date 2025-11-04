@@ -9,6 +9,9 @@ import BarTopText from "../../components/charts/BarTopText";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
 const fmt = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
+const fmtPct = (n, digits = 2) =>
+  n === null || n === undefined ? "—" : `${Number(n).toFixed(digits)}%`;
+
 async function fetchJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -23,36 +26,64 @@ export default function Overview({ selectedDataset }) {
   const [qDist, setQDist] = useState({ numeric_bins: [], text_top: [] });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [metrics, setMetrics] = useState(null); // added state
 
   // load summary + regions + question list
   useEffect(() => {
     if (!selectedDataset) {
-      setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
+      setSummary(null);
+      setRegionCompleted([]);
+      setQuestions([]);
+      setQCode("");
+      setQDist({ numeric_bins: [], text_top: [] });
+      setMetrics(null);
       return;
     }
+
     (async () => {
-      try {
-        setLoading(true); setErr("");
-        const [s, reg, q] = await Promise.all([
-          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/summary`),
-          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/by-region-completed`),
-          fetchJson(`${API_BASE}/api/dataset/${selectedDataset}/questions`),
-        ]);
+      setLoading(true); setErr("");
+      const urls = {
+        summary:     `${API_BASE}/api/dataset/${selectedDataset}/summary`,
+        byRegion:    `${API_BASE}/api/dataset/${selectedDataset}/by-region-completed`,
+        questions:   `${API_BASE}/api/dataset/${selectedDataset}/questions`,
+        // served by backend (server.js must have: app.use('/data', express.static(path.join(process.cwd(),'backend','data')))
+        metricsJson: `${API_BASE}/data/clean/metrics.json`,
+      };
 
-        setSummary(s);
-        setRegionCompleted((reg.items || []).map(r => ({ label: r.region, value: r.completed })));
+      const [rSummary, rRegion, rQs, rMetrics] = await Promise.allSettled([
+        fetchJson(urls.summary),
+        fetchJson(urls.byRegion),
+        fetchJson(urls.questions),
+        fetchJson(urls.metricsJson),
+      ]);
 
-        const qs = (q.items?.length ? q.items : s.top_questions || []).map(x => x.question ? x : {question: x});
+      // metrics.json should not be blocked by other failures
+      if (rMetrics.status === "fulfilled") setMetrics(rMetrics.value);
+      else setMetrics(null); // still render the rest
+
+      if (rSummary.status === "fulfilled") {
+        setSummary(rSummary.value);
+      } else {
+        setSummary(null);
+        setErr("Failed to load summary"); // but don't bail out
+      }
+
+      if (rRegion.status === "fulfilled") {
+        setRegionCompleted((rRegion.value.items || []).map(r => ({ label: r.region, value: r.completed })));
+      } else {
+        setRegionCompleted([]);
+      }
+
+      if (rQs.status === "fulfilled") {
+        const s = rSummary.status === "fulfilled" ? rSummary.value : {};
+        const qs = (rQs.value.items?.length ? rQs.value.items : s.top_questions || []).map(x => x.question ? x : { question: x });
         setQuestions(qs);
         setQCode(qs?.[0]?.question || "");
-
-      } catch (e) {
-        console.error("overview load failed", e);
-        setErr("Failed to load summary");
-        setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
-      } finally {
-        setLoading(false);
+      } else {
+        setQuestions([]); setQCode("");
       }
+
+      setLoading(false);
     })();
   }, [selectedDataset]);
 
@@ -75,6 +106,28 @@ export default function Overview({ selectedDataset }) {
   const topRegion = (summary?.by_region_facts || [])[0];
   const completedPct = summary ? Math.round(summary.completed_pct || 0) : null;
 
+  // derived from metrics.json (if available)
+  const totalResponses = metrics?.rows_completed ?? null;              // completed sessions
+  const completedRate = metrics?.completion_rate_pct ?? null;         // optional subtext
+  const generatedAt = metrics?.generated_at ? new Date(metrics.generated_at).toLocaleString() : null;
+
+  // --- metrics.json based values ---
+  const completionPctFromMetrics =
+    metrics?.completion_rate_pct !== undefined && metrics?.completion_rate_pct !== null
+      ? Number(metrics.completion_rate_pct)
+      : null;
+
+  const metricsUpdatedAt = metrics?.generated_at
+    ? new Date(metrics.generated_at).toLocaleString()
+    : null;
+
+  // prefer metrics values when present; fallback to summary
+  const respondentsValue = totalResponses ?? totalResp;
+  const respondentsSub =
+    completedRate != null
+      ? `${Number(completedRate).toLocaleString()}%`
+      : (generatedAt ? `Updated ${generatedAt}` : (completedPct === null ? "" : `${completedPct}%`));
+
   async function deleteDataset() {
     if (!selectedDataset) return;
     const yes = window.confirm("Delete this dataset (facts & audit)? This cannot be undone.");
@@ -87,6 +140,12 @@ export default function Overview({ selectedDataset }) {
       alert("Delete failed: " + e.message);
     }
   }
+
+  const topRegionComputed = useMemo(() => {
+    if (!regionCompleted || regionCompleted.length === 0) return null;
+    return regionCompleted.reduce((best, r) =>
+      (r.value > (best?.value ?? -Infinity) ? r : best), null);
+  }, [regionCompleted]);
 
   return (
     <div className="space-y-6">
@@ -107,11 +166,36 @@ export default function Overview({ selectedDataset }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <KPI label="Respondents" value={loading ? "…" : fmt(totalResp)} />
-        <KPI label="Facts Indexed" value={loading ? "…" : fmt(factCount)} sub="Long-form Q/A facts" />
-        <KPI label="Top Region" value={topRegion ? topRegion.region : "Unspecified"} sub={topRegion ? `${fmt(topRegion.facts)} facts` : ""} />
-        <KPI label="Completed %" value={completedPct === null ? "—" : `${completedPct}%`} sub="(dated or dense)" />
+      <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+        <KPI
+          label="Total Responses"
+          value={loading && !metrics ? "…" : fmt(totalResponses)}
+          sub={
+            completedRate != null
+              ? `${Number(completedRate).toFixed(2)}% • ${generatedAt || ""}`
+              : (generatedAt ? `Updated ${generatedAt}` : "")
+          }
+        />
+        <KPI label="Respondents" value={loading ? "…" : fmt(summary?.respondent_count ?? null)} />
+        <KPI label="Facts Indexed" value={loading ? "…" : fmt(summary?.fact_count ?? null)} sub="Long-form Q/A facts" />
+        <KPI
+          label="Top Region"
+          value={topRegionComputed ? topRegionComputed.label : "Unspecified"}
+          sub={topRegionComputed ? `${fmt(topRegionComputed.value)} completed` : ""}
+        />
+        <KPI
+          label="Completed %"
+          value={
+            completionPctFromMetrics !== null
+              ? fmtPct(completionPctFromMetrics, 2)
+              : (summary ? fmtPct(Math.round(summary.completed_pct || 0), 0) : "—")
+          }
+          sub={
+            completionPctFromMetrics !== null
+              ? (metricsUpdatedAt ? `from metrics.json • ${metricsUpdatedAt}` : `from metrics.json`)
+              : "(dated or dense)"
+          }
+        />
       </div>
 
       {/* Question Distribution */}
