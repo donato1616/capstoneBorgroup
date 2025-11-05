@@ -5,13 +5,14 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 
 import datasetRoute from "./routes/dataset.js";
-import fieldRouter from "./api/field.js";
 import userRoutes from "./routes/users.js";
+import fieldRouter from "./api/field.js";
 
 dotenv.config();
 
 const app = express();
 const prisma = new PrismaClient();
+
 
 // ---- Config ----
 const PORT = Number(process.env.PORT || 5050);
@@ -46,7 +47,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ---- Routes ----
 app.use("/api/dataset", datasetRoute);
-app.use("/api/field", fieldRouter); // ✅ moved *after* app initialization
+app.use("/api/field", fieldRouter);
 app.use("/api/users", userRoutes);
 
 // ====== Helper: resolve dataset UUID ======

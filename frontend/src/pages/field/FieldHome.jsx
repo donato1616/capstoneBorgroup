@@ -5,22 +5,22 @@ export default function FieldHome({ user }) {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // Placeholder backend call
-    async function fetchData() {
-      try {
-        const res = await fetch(`http://localhost:5050/api/field/dashboard/${user.id}`);
-        const data = await res.json();
-        setDashboardData(data);
-      } catch (err) {
-        console.error("Failed to load dashboard:", err);
-      } finally {
-        setLoading(false);
-      }
+useEffect(() => {
+  async function fetchData() {
+    try {
+      const userId = user?.id ?? "undefined"; // ✅ fallback
+      const res = await fetch(`http://localhost:5050/api/field/dashboard/${userId}`);
+      const data = await res.json();
+      setDashboardData(data);
+    } catch (err) {
+      console.error("Failed to load dashboard:", err);
+    } finally {
+      setLoading(false);
     }
+  }
 
-    fetchData();
-  }, [user.id]);
+  fetchData();
+}, [user?.id]);
 
   if (loading) return <p className="text-sm text-zinc-500">Loading dashboard...</p>;
   if (!dashboardData) return <p className="text-sm text-red-500">No data available.</p>;
