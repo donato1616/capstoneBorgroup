@@ -4,12 +4,11 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { spawn } from "child_process";
-import { PrismaClient } from "@prisma/client";
+import prisma from "../lib/prisma.js";
 
 import { chooseMapping, readBestSheet } from "../etl/loader.js";
 import { consolidateRows } from "../etl/transform.js";
 
-const prisma = new PrismaClient();
 const router = express.Router();
 
 // ---------------------------- config knobs ----------------------------
@@ -178,11 +177,11 @@ function makeHorizon(lastDateISO, lastX, a, b, steps=7, interval='day') {
 // ---------------------------- list ----------------------------
 router.get('/', async (_req, res) => {
   try {
-    const rows = await prisma.$queryRawUnsafe(`
+    const rows = await prisma.$queryRaw`
       select id, name, upload_date, status, data_type, file_format, coalesce(tags,'') as tags
       from datasets
       order by upload_date desc nulls last, id desc
-    `);
+    `;
     res.json((rows || []).map(r => ({
       dataset_id: r.id,
       name: r.name,
@@ -193,17 +192,18 @@ router.get('/', async (_req, res) => {
       tags: r.tags
     })));
   } catch (e) {
-    console.error('dataset_list_failed:', e);
-    res.status(500).json({ message: 'dataset_list_failed', detail: e.message });
+    console.error('dataset_list_failed:', e?.message);
+    const status = /Can't reach database server/i.test(e?.message) ? 503 : 500;
+    res.status(status).json({ message: 'dataset_list_failed', detail: e?.message });
   }
 });
 
 router.get('/_health', async (_req, res) => {
   try {
-    const c = await prisma.$queryRawUnsafe(`select count(*)::int as c from datasets`);
+    const c = await prisma.$queryRaw`select count(*)::int as c from datasets`;
     res.json({ ok: true, datasets: c?.[0]?.c ?? 0 });
   } catch (e) {
-    res.status(500).json({ ok: false, detail: e.message });
+    res.status(503).json({ ok: false, detail: e?.message });
   }
 });
 

@@ -1,7 +1,9 @@
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
-import { PrismaClient } from "@prisma/client";
+
+// ✅ use the shared prisma instance
+import prisma from "./lib/prisma.js";
 
 // Import routes (ESM)
 import auditRoute from "./routes/audit.js";
@@ -9,9 +11,9 @@ import datasetRoute from "./routes/dataset.js";
 import userRoutes from "./routes/users.js";
 import fieldRouter from "./api/field.js";
 
-const app = express();
-
 dotenv.config();
+
+const app = express();
 
 // ---- Config ----
 const PORT = Number(process.env.PORT || 5050);
@@ -37,19 +39,28 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204,
 };
-
 app.use(cors(corsOptions));
 
-// ---- Audit Trail ----
-app.use('/api/audit', auditRoute);
-
 // ---- Body parsing ----
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: "10mb" }));
 
 // ---- Health Check ----
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Quick DB health
+app.get("/health/db", async (_req, res) => {
+  try {
+    // cheap ping
+    await prisma.$queryRaw`select 1 as ok`;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DB health fail:", err?.message);
+    res.status(503).json({ ok: false, error: "db_unreachable", detail: err?.message });
+  }
+});
+
 // ---- Routes ----
+app.use("/api/audit", auditRoute);
 app.use("/api/dataset", datasetRoute);
 app.use("/api/field", fieldRouter);
 app.use("/api/users", userRoutes);
@@ -69,7 +80,7 @@ async function resolveDatasetUuid(idParam) {
   return rows[0].dataset_id;
 }
 
-// ====== Legacy Routes ======
+// ====== Legacy Routes (kept, now using shared prisma) ======
 app.get("/api/datasets", async (_req, res) => {
   try {
     const datasets = await prisma.$queryRaw`
@@ -98,17 +109,18 @@ app.get("/api/datasets", async (_req, res) => {
     res.json(datasets);
   } catch (err) {
     console.error("Error fetching datasets:", err);
-    res.status(500).json({ message: "Error fetching datasets", detail: err.message });
+    // If DB is unreachable, surface 503 so frontend can show a friendly banner
+    const status = /Can't reach database server/i.test(err?.message) ? 503 : 500;
+    res.status(status).json({ message: "Error fetching datasets", detail: err?.message });
   }
 });
 
 app.get('/api/datasets/:id/rows', async (req, res) => {
   try {
     const { id } = req.params;
-    const status = (req.query.status || 'flagged').toLowerCase();
+    const status = (req.query.status || 'flagged').toLowerCase(); // ✅ fixed typo (was statusx)
     const limit = Math.min(parseInt(req.query.limit || '50', 10), 200);
     const offset = parseInt(req.query.offset || '0', 10);
-
     const dsUuid = await resolveDatasetUuid(id);
 
     if (status === 'flagged') {
@@ -131,7 +143,7 @@ app.get('/api/datasets/:id/rows', async (req, res) => {
       return res.json(rows);
     }
 
-    if (statusx === 'clean') {
+    if (status === 'clean') {
       const rows = await prisma.$queryRaw`
         select clean_row_id, business_key, observed_at, region, surveyor, measures, src_json
         from dwh.clean_row
@@ -152,7 +164,8 @@ app.get('/api/datasets/:id/rows', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('Error fetching rows:', err);
-    res.status(500).json({ message: 'Error fetching rows', detail: err.message });
+    const status = /Can't reach database server/i.test(err?.message) ? 503 : 500;
+    res.status(status).json({ message: 'Error fetching rows', detail: err?.message });
   }
 });
 
@@ -224,12 +237,22 @@ app.patch('/api/datasets/:id/rows/:rowId', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Error applying fix:', err);
-    res.status(500).json({ message: 'Error applying fix', detail: err.message });
+    const status = /Can't reach database server/i.test(err?.message) ? 503 : 500;
+    res.status(status).json({ message: 'Error applying fix', detail: err?.message });
   }
 });
 
 // ---- Start ----
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`CORS allowed origins: ${Array.from(allowedOrigins).join(", ")}`);
-});
+(async () => {
+  try {
+    // Early connect so failures are obvious at boot
+    await prisma.$connect();
+  } catch (e) {
+    console.error("Prisma connect failed:", e?.message);
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`CORS allowed origins: ${Array.from(allowedOrigins).join(", ")}`);
+  });
+})();
