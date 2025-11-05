@@ -1,6 +1,6 @@
 // src/lib/api.js
 export const API_BASE =
-  import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || 'http://localhost:5000';
+  import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || 'http://localhost:5050';
 
 // Function to fetch datasets with credentials
 export async function fetchDatasets() {
