@@ -192,7 +192,7 @@ export default function PredictiveInsights() {
                       onChange={e => setQNum(e.target.value)}>
                 <option value="">— choose numeric —</option>
                 {qSchema.filter(x=>x.kind==='numeric').map(x=>(
-                  <option key={x.question} value={x.question}>{x.question}</option>
+                <option key={x.question} value={x.question}>{x.label || x.question}</option>
                 ))}
               </select>
               <span className="text-sm">Agg:</span>
@@ -214,9 +214,9 @@ export default function PredictiveInsights() {
                       value={qCat}
                       onChange={e => setQCat(e.target.value)}>
                 <option value="">— choose categorical —</option>
-                {qSchema.filter(x=>x.kind==='categorical').map(x=>(
-                  <option key={x.question} value={x.question}>{x.question}</option>
-                ))}
+              {qSchema.filter(x=>x.kind==='categorical').map(x=>(
+                <option key={x.question} value={x.question}>{x.label || x.question}</option>
+              ))}
               </select>
               <span className="text-sm">Top-K:</span>
               <input className="border rounded px-2 py-1 w-16" type="number" min="1" max="10"

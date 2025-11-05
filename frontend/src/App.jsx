@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
   Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
-  Megaphone, UserCircle, FileText, FilePlus2, Database
+  Megaphone, UserCircle, FileText, FilePlus2, Database, Lightbulb
 } from "lucide-react";
 
 // Login page
@@ -13,9 +13,10 @@ import Login from "./pages/Login.jsx";
 import Overview from "./pages/admin/Overview.jsx";
 import Completion from "./pages/admin/Completion.jsx";
 import Predictive from "./pages/admin/Predictive.jsx";
+import Prescriptive from "./pages/admin/Prescriptive.jsx"; // <-- NEW
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
-import AdminProfile from "./pages/admin/AdminProfile.jsx";
+import AdminProfile from './pages/admin/AdminProfile.jsx';
 import AdminDashboard from './pages/admin/index.jsx';
 
 // Field researcher pages
@@ -235,6 +236,8 @@ export default function App() {
             active={active === "completion"} onClick={() => setActive("completion")} />
           <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
             active={active === "predictive"} onClick={() => setActive("predictive")} />
+          <SideLink icon={<Lightbulb size={18} />} label="Prescriptive Insights"   // <-- NEW
+            active={active === "prescriptive"} onClick={() => setActive("prescriptive")} />
           <SideLink icon={<Users size={18} />} label="Field Management"
             active={active === "field"} onClick={() => setActive("field")} />
           <SideLink icon={<History size={18} />} label="Audit Trail"
@@ -319,6 +322,7 @@ export default function App() {
           )}
           {active === "completion" && <Completion />}
           {active === "predictive" && <Predictive />}
+          {active === "prescriptive" && <Prescriptive />} {/* <-- NEW */}
           {active === "field" && <FieldMgmt />}
           {active === "audit" && <AuditTrail />}
           {active === "profile" && <AdminProfile user={user} />}

@@ -128,7 +128,7 @@ app.get('/api/datasets/:id/rows', async (req, res) => {
       return res.json(rows);
     }
 
-    if (status === 'clean') {
+    if (statusx === 'clean') {
       const rows = await prisma.$queryRaw`
         select clean_row_id, business_key, observed_at, region, surveyor, measures, src_json
         from dwh.clean_row

@@ -57,7 +57,6 @@ function readFileToBuffer(file) {
   if (file?.path) return fs.readFileSync(file.path);
   return null;
 }
-// numeric-ish detector (also used in /qdist)
 function isNumericish(s) {
   if (s === null || s === undefined) return false;
   const t = String(s).trim();
@@ -80,6 +79,46 @@ function normTextToken(s) {
     .toUpperCase();
 }
 
+// --------- Human-friendly question label ---------
+function prettyQuestionLabel(code, sampleText) {
+  if (!code) return '';
+
+  // 1) strip common survey prefixes & boilerplate
+  let s = String(code)
+    .replace(/^A_+/i, '')
+    .replace(/^B_+/i, '')
+    .replace(/^ISQ_+/i, '')
+    .replace(/_?DISPLAYEDITPARAMETERSH_?\d*/i, '')
+    .replace(/_?DISPLAYEDITPARAMETERS_?\d*/i, '')
+    .replace(/^Q_+/i, 'Q')
+    .replace(/__+/g, '_');
+
+  // 2) expand a few very common acronyms/codes
+  const dict = [
+    [/^AGE1$/i, 'Age'],
+    [/^GENDER1?$/i, 'Gender'],
+    [/ALLQUALIFIEDRESP/gi, 'All Qualified Respondents'],
+    [/_RESP\b/gi, ' Respondents'],
+  ];
+  for (const [re, repl] of dict) s = s.replace(re, repl);
+
+  // 3) underscores -> spaces; compact spaces
+  s = s.replace(/_/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+  // 4) make it Title Case (but leave Q-codes as is)
+  s = s.split(' ').map(tok => {
+    if (/^Q\d+[a-z]*$/i.test(tok)) return tok.toUpperCase();
+    return tok.charAt(0).toUpperCase() + tok.slice(1).toLowerCase();
+  }).join(' ');
+
+  // 5) add example answer as a hint (tiny, trimmed)
+  if (sampleText) {
+    const ex = String(sampleText).trim();
+    if (ex) s = `${s} — e.g., ${ex.slice(0, 40)}`;
+  }
+  return s;
+}
+
 // --------- OLS helpers (shared by multiple endpoints) ---------
 function olsFit(points) {
   const n = points.length;
@@ -93,7 +132,7 @@ function olsFit(points) {
   const yhat = points.map(p => a * p.x + b);
   const ybar = sy / n;
 
-  const yhatClamp = yhat.map(v => Math.max(0, v)); // we don’t want negative forecasts
+  const yhatClamp = yhat.map(v => Math.max(0, v));
 
   const mse   = points.reduce((s,p,i)=> s + Math.pow(p.y - yhatClamp[i], 2), 0) / n;
   const rmse  = Math.sqrt(mse);
@@ -109,16 +148,13 @@ function olsFit(points) {
   const mae  = points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0) / n;
   const wape = (points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0)) / ((points.reduce((s,p)=> s + Math.abs(p.y), 0)) || 1);
 
-  // classic MAPE (skips zeros) – this is what can blow up to 193%+ when actuals are small
   const mapeArr = points.map((p,i)=> p.y !== 0 ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
   const mape    = mapeArr.length ? (mapeArr.reduce((s,v)=>s+v,0)/mapeArr.length) : null;
 
-  // MAPE with denominator floor (ignore points with very small actuals)
   const MAPE_FLOOR = 5;
   const mapeFloorArr = points.map((p,i)=> p.y >= MAPE_FLOOR ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
   const mape_floor5 = mapeFloorArr.length ? (mapeFloorArr.reduce((s,v)=>s+v,0)/mapeFloorArr.length) : null;
 
-  // sMAPE (bounded 0..2) – much easier to defend in low-count regimes
   const smapeArr = points.map((p,i)=>{
     const denom = Math.abs(p.y) + Math.abs(yhatClamp[i]) + EPS;
     return (2 * Math.abs(p.y - yhatClamp[i])) / denom;
@@ -766,6 +802,7 @@ router.get('/:id/predict/regression', async (req, res) => {
 });
 
 // Compatibility alias used by some frontends: /forecast
+// Compatibility alias used by some frontends: /forecast
 router.get('/:id/forecast', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -778,7 +815,12 @@ router.get('/:id/forecast', async (req, res) => {
       GROUP BY day
       ORDER BY day
     `;
-    let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: r.day }));
+
+    let pts = (daily || []).map((r, i) => ({
+      x: i,
+      y: Number(r.completed || 0),
+      date: r.day
+    }));
 
     if (pts.length < 2) {
       const totalDistinct = await prisma.$queryRaw`
@@ -795,15 +837,25 @@ router.get('/:id/forecast', async (req, res) => {
     }
 
     const n = pts.length;
-    const sx = pts.reduce((s,p)=>s+p.x,0);
-    const sy = pts.reduce((s,p)=>s+p.y,0);
-    const sxx= pts.reduce((s,p)=>s+p.x*p.x,0);
-    const sxy= pts.reduce((s,p)=>s+p.x*p.y,0);
+    const sx  = pts.reduce((s,p)=>s+p.x,0);
+    const sy  = pts.reduce((s,p)=>s+p.y,0);
+    const sxx = pts.reduce((s,p)=>s+p.x*p.x,0);
+    const sxy = pts.reduce((s,p)=>s+p.x*p.y,0);
     const denom = (n*sxx - sx*sx) || 1;
     const a = (n*sxy - sx*sy)/denom;
     const b = (sy - a*sx)/n;
 
-    const horizon = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, a, b, 7, 'day');
+    const horizon = (function makeHorizon(lastDateISO, lastX, a, b, steps=7) {
+      const out = [];
+      const base = new Date(lastDateISO);
+      for (let k=1; k<=steps; k++) {
+        const d = new Date(base);
+        d.setDate(d.getDate() + k);
+        const x = lastX + k;
+        out.push({ date: d.toISOString().slice(0,10), projected: Math.max(0, Math.round(a*x + b)) });
+      }
+      return out;
+    })(pts[pts.length-1].date, pts[pts.length-1].x, a, b, 7);
 
     res.json({ dataset_id: id, metrics: {}, horizon });
   } catch (e) {
@@ -814,7 +866,7 @@ router.get('/:id/forecast', async (req, res) => {
 
 // ===== QUESTION-LEVEL PREDICTIVE =====
 
-// 1) auto-classify questions by type
+// 1) auto-classify questions by type (now returns a human-friendly "label")
 router.get('/:id/questions/schema', async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -828,11 +880,19 @@ router.get('/:id/questions/schema', async (req, res) => {
         FROM "ResponseFact"
         WHERE "datasetId" = ${id}
         GROUP BY "questionCode"
+      ),
+      s AS (
+        SELECT DISTINCT ON ("questionCode")
+               "questionCode", "answerText"
+        FROM "ResponseFact"
+        WHERE "datasetId" = ${id}
+          AND "answerText" IS NOT NULL
+        ORDER BY "questionCode", random()
       )
-      SELECT q, n, n_num, n_text, uniq_text
-      FROM b
-      WHERE q IS NOT NULL
-      ORDER BY n DESC
+      SELECT b.q, b.n, b.n_num, b.n_text, b.uniq_text, COALESCE(s."answerText",'') AS sample_text
+      FROM b LEFT JOIN s ON s."questionCode" = b.q
+      WHERE b.q IS NOT NULL
+      ORDER BY b.n DESC
       LIMIT 400
     `;
     const items = (rows || []).map(r => {
@@ -840,7 +900,17 @@ router.get('/:id/questions/schema', async (req, res) => {
       let kind = 'text';
       if (fracNum >= 0.4) kind = 'numeric';
       else if (r.uniq_text <= 30 && r.uniq_text > 0) kind = 'categorical';
-      return { question: r.q, total: r.n, numeric_rows: r.n_num, text_rows: r.n_text, unique_text: r.uniq_text, kind };
+      const label = prettyQuestionLabel(r.q, r.sample_text);
+      return {
+        question: r.q,
+        label,           // << human-friendly label for dropdowns
+        total: r.n,
+        numeric_rows: r.n_num,
+        text_rows: r.n_text,
+        unique_text: r.uniq_text,
+        kind,
+        sampleText: r.sample_text
+      };
     });
     res.json({ items });
   } catch (e) {
@@ -1026,6 +1096,130 @@ router.get('/:id/predict/question/categorical', async (req, res) => {
     res.status(500).json({ message: 'q_categorical_forecast_failed', detail: e.message });
   }
 });
+
+// ==================== PRESCRIPTIVE ROUTES ====================
+
+// GET /api/dataset/:id/prescriptive/staffing?target=200&deadline=YYYY-MM-DD&rate=8&workdays=6
+// Simple capacity-based planner: compute # of interviewers needed and a flat daily plan.
+router.get('/:id/prescriptive/staffing', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const target = Math.max(1, Number(req.query.target || 0));
+    const rate = Math.max(1, Number(req.query.rate || 8));          // interviews per interviewer per day
+    const workdays = Math.min(7, Math.max(1, Number(req.query.workdays || 6)));
+    const deadlineStr = String(req.query.deadline || '').slice(0, 10);
+    if (!deadlineStr || isNaN(Date.parse(deadlineStr))) {
+      return res.status(400).json({ error: 'deadline (YYYY-MM-DD) required' });
+    }
+
+    const today = new Date(); today.setHours(0,0,0,0);
+    const deadline = new Date(deadlineStr + "T00:00:00");
+    if (deadline < today) return res.status(400).json({ error: 'deadline must be today or later' });
+
+    // count available workdays between today and deadline, respecting workdays/week
+    // naive approach: assume Sat/Sun off if workdays<=5, else all days except 7-workdays off from weekend-first
+    let availableDates = [];
+    const cur = new Date(today);
+    while (cur <= deadline) {
+      const dow = cur.getDay(); // 0 Sun..6 Sat
+      let isWorkday = true;
+      if (workdays <= 5) {
+        // Mon-Fri only
+        isWorkday = dow >= 1 && dow <= 5;
+      } else if (workdays === 6) {
+        // Mon-Sat
+        isWorkday = dow >= 1 && dow <= 6;
+      } else {
+        // 7 -> all days
+        isWorkday = true;
+      }
+      if (isWorkday) {
+        availableDates.push(cur.toISOString().slice(0,10));
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+    const available_workdays = availableDates.length || 1;
+
+    // capacity math
+    const required_interviewers = Math.max(1, Math.ceil(target / (rate * available_workdays)));
+    const max_capacity = required_interviewers * rate * available_workdays;
+
+    // flat daily plan until target reached
+    const perDay = Math.max(1, Math.floor(target / available_workdays));
+    let remaining = target;
+    const daily_plan = availableDates.map(d => {
+      const todayCompletes = Math.min(perDay, remaining);
+      remaining -= todayCompletes;
+      return { date: d, interviewers: required_interviewers, expected_completes: todayCompletes };
+    });
+    if (remaining > 0 && daily_plan.length) {
+      // push remainder to the last day
+      daily_plan[daily_plan.length - 1].expected_completes += remaining;
+      remaining = 0;
+    }
+
+    res.json({
+      dataset_id: id,
+      target,
+      rate,
+      workdays,
+      deadline: deadlineStr,
+      available_workdays,
+      required_interviewers,
+      max_capacity,
+      daily_plan
+    });
+  } catch (e) {
+    console.error('prescriptive_staffing_failed:', e);
+    res.status(500).json({ message: 'prescriptive_staffing_failed', detail: e.message });
+  }
+});
+
+// GET /api/dataset/:id/prescriptive/region-allocation?target=200
+// Allocate the target to regions by historical completion share (fallback equal split).
+router.get('/:id/prescriptive/region-allocation', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const target = Math.max(1, Number(req.query.target || 0));
+
+    const rows = await prisma.$queryRaw`
+      SELECT COALESCE(region,'Unspecified') AS region,
+             COUNT(DISTINCT "respondentId")::int AS cnt
+      FROM "ResponseFact"
+      WHERE "datasetId" = ${id} AND "interviewDate" IS NOT NULL
+      GROUP BY region
+      ORDER BY cnt DESC
+      LIMIT 20
+    `;
+    let items = [];
+    if (!rows || rows.length === 0) {
+      // equal split fallback across one bucket
+      items = [{ region: 'Overall', cnt: 1 }];
+    } else {
+      items = rows.map(r => ({ region: r.region, cnt: Number(r.cnt || 0) }));
+    }
+    const total = items.reduce((s, r) => s + (r.cnt || 0), 0) || items.length;
+    const withShare = items.map(r => ({ ...r, share: (r.cnt || 0) / total }));
+
+    // round allocation while preserving total
+    let assigned = withShare.map(r => ({ region: r.region, share: r.share, assigned: Math.floor(r.share * target) }));
+    let remainder = target - assigned.reduce((s, r) => s + r.assigned, 0);
+    // give remainders to top shares
+    assigned.sort((a,b)=>b.share - a.share);
+    for (let i=0; i<assigned.length && remainder>0; i++, remainder--) {
+      assigned[i].assigned += 1;
+    }
+    // restore original order by share desc
+    assigned.sort((a,b)=>b.share - a.share);
+
+    res.json({ dataset_id: id, target, items: assigned });
+  } catch (e) {
+    console.error('prescriptive_region_failed:', e);
+    res.status(500).json({ message: 'prescriptive_region_failed', detail: e.message });
+  }
+});
+
+
 
 // ---------------------------- preview/debug ----------------------------
 router.get('/:id/preview', async (req, res) => {
