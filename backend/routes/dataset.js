@@ -1,25 +1,16 @@
-// backend/routes/dataset.js (ESM version)
 import express from "express";
 import multer from "multer";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { spawn } from "child_process";
 import { PrismaClient } from "@prisma/client";
 
-// Import ETL helpers
 import { chooseMapping, readBestSheet } from "../etl/loader.js";
 import { consolidateRows } from "../etl/transform.js";
 
-const router = express.Router();
-
-const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { spawn } = require('child_process'); // ML helpers
-
-const { PrismaClient } = require('@prisma/client');
-const { chooseMapping, readBestSheet } = require('../etl/loader');
-const { consolidateRows } = require('../etl/transform');
-
 const prisma = new PrismaClient();
+const router = express.Router();
 
 // ---------------------------- config knobs ----------------------------
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 200);
@@ -1312,4 +1303,4 @@ router.use((err, req, res, next) => {
   next(err);
 });
 
-module.exports = router;
+export default router;

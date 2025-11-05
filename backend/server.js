@@ -1,20 +1,17 @@
-// backend/server.js (CommonJS, Prisma, Express)
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const { PrismaClient } = require('@prisma/client');
-const auditRoute = require('./routes/audit');
+import dotenv from "dotenv";
+import express from "express";
+import cors from "cors";
+import { PrismaClient } from "@prisma/client";
 
-
+// Import routes (ESM)
+import auditRoute from "./routes/audit.js";
 import datasetRoute from "./routes/dataset.js";
 import userRoutes from "./routes/users.js";
 import fieldRouter from "./api/field.js";
 
-dotenv.config();
-
 const app = express();
-const prisma = new PrismaClient();
 
+dotenv.config();
 
 // ---- Config ----
 const PORT = Number(process.env.PORT || 5050);

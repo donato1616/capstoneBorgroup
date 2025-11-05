@@ -1,8 +1,8 @@
 // backend/etl/loader.js (CommonJS)
-const xlsx = require('xlsx');
-const fs = require('fs');
-const path = require('path');
-const { normalizeHeader } = require('./canonical');
+import xlsx from "xlsx";
+import fs from "fs";
+import path from "path";
+import { normalizeHeader } from "./canonical.js";
 
 /**
  * Load JSON mapping files from ./etl/mappings/*.json
@@ -24,7 +24,7 @@ function loadMappings() {
   });
 }
 
-export function chooseMapping(filename) {
+function chooseMapping(filename) {
   const maps = loadMappings();
   const fname = String(filename || '').toLowerCase();
 
@@ -187,4 +187,4 @@ function readBestSheet(buffer, filename, mapping = {}) {
   return { sheetName, rows, normMap, headers: keep };
 }
 
-module.exports = { chooseMapping, readBestSheet };
+export { chooseMapping, readBestSheet };

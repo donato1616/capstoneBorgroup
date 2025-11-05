@@ -4,7 +4,7 @@
  * Canonical logical fields and a wide set of vendor/partner alternates.
  * These lists are intentionally generous to keep the ETL resilient.
  */
-const CANON = {
+export const CANON = {
   respondentId: [
     // originals
     'Respondent.Serial','SbjNum','RespondentID','RespID',
@@ -52,7 +52,7 @@ const CANON = {
 };
 
 /** Normalize a raw header to a lowercased, safe token. */
-function normalizeHeader(h) {
+export function normalizeHeader(h) {
   return String(h || '')
     .replace(/\.+/g, '.')      // collapse dots
     .replace(/\s+/g, '_')      // spaces -> _
@@ -62,7 +62,7 @@ function normalizeHeader(h) {
 }
 
 /** Heuristic: columns that look like survey questions / measures. */
-function isQuestionCol(col) {
+export function isQuestionCol(col) {
   const c = String(col || '').toLowerCase();
 
   // classic Q-codes
@@ -75,5 +75,3 @@ function isQuestionCol(col) {
 
   return false;
 }
-
-module.exports = { CANON, normalizeHeader, isQuestionCol };

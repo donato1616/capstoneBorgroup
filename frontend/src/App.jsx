@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import {
   Bell, Download, Grid2X2, Activity, LineChart, Users, History,
   Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
-  Megaphone, UserCircle, FileText, FilePlus2, Database
+  Megaphone, UserCircle, FileText, FilePlus2, Database, Lightbulb
 } from "lucide-react";
 
 // Login page
