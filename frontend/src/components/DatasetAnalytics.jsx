@@ -25,6 +25,8 @@ export default function DatasetAnalytics({ datasetId }) {
         setSummary(s);
         // preselect the top question if present
         if (s?.top_questions?.length) setQcode(s.top_questions[0].question);
+        const firstQ = s?.top_questions?.[0]?.question;
+        setQcode(firstQ || '');
       })
       .catch((e) => console.error(e))
       .finally(() => setLoading(false));

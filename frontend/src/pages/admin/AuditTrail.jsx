@@ -23,7 +23,7 @@ async function getAuditLog({ datasetId = "", actor = "", action = "", from = "",
   const qs = new URLSearchParams({ limit, offset });
   const res = await fetch(`${API_BASE}/api/dataset/${encodeURIComponent(datasetId)}/audit?${qs.toString()}`, { credentials: "include" });
   if (!res.ok) throw new Error("audit list failed");
-  return res.json(); // {total, items:[...]}
+  return res.json();
 }
 
 function fmtDateTime(iso) {
@@ -58,17 +58,7 @@ function renderDetails(row) {
 }
 
 export default function AuditTrail() {
-  // filters
-  const [datasetId, setDatasetId] = useState(""); // uuid or legacy int
-  const [actor, setActor] = useState("");
-  const [action, setAction] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-
-  // facets + data
-  const [datasets, setDatasets] = useState([]);
-  const [actors, setActors] = useState([]);
-  const [actions, setActions] = useState([]);
+  const [datasetId, setDatasetId] = useState("");
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
 
@@ -79,8 +69,8 @@ export default function AuditTrail() {
   const offset = useMemo(() => (page - 1) * limit, [page, limit]);
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
-  // load facets once (and fall back to /api/datasets if needed)
   useEffect(() => {
+    if (!datasetId) { setItems([]); setTotal(0); return; }
     (async () => {
       try {
         const fac = await getAuditFacets();
@@ -139,82 +129,22 @@ export default function AuditTrail() {
         setLoading(false);
       }
     })();
-  }, [datasetId, actor, action, from, to, limit, offset]);
+  }, [datasetId, limit, offset]);
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-600">Dataset</span>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={datasetId}
-            onChange={(e) => { setDatasetId(e.target.value); setPage(1); }}
-          >
-            {datasets.length === 0 && <option value="">— No datasets —</option>}
-            {datasets.map(d => (
-              <option key={d.dataset_id} value={d.dataset_id}>{d.name}</option>
-            ))}
-          </select>
-        </div>
+      <DatasetSelector onSelectDataset={(id) => { setDatasetId(id); setPage(1); }} />
 
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-600">User</span>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={actor}
-            onChange={(e) => { setActor(e.target.value); setPage(1); }}
-          >
-            <option value="">All</option>
-            {actors.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-600">Action</span>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={action}
-            onChange={(e) => { setAction(e.target.value); setPage(1); }}
-          >
-            <option value="">All</option>
-            {actions.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-600">From</span>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 text-sm"
-            value={from}
-            onChange={(e) => { setFrom(e.target.value); setPage(1); }}
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-zinc-600">To</span>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 text-sm"
-            value={to}
-            onChange={(e) => { setTo(e.target.value); setPage(1); }}
-          />
-        </div>
-      </div>
-
-      {/* Table */}
       <Card>
-        <div className="p-4 border-b border-zinc-200 text-sm font-medium">Audit Trail</div>
+        <div className="p-4 border-b text-sm font-medium">Audit Trail & Open Issues</div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-zinc-500">
-              <tr className="border-b border-zinc-200">
+              <tr className="border-b">
                 <th className="p-3">Timestamp</th>
                 <th className="p-3">User</th>
                 <th className="p-3">Action</th>
-                <th className="p-3">Extent</th>
+                <th className="p-3">Dataset</th>
                 <th className="p-3">Details</th>
               </tr>
             </thead>
@@ -239,25 +169,14 @@ export default function AuditTrail() {
           </table>
         </div>
 
-        {/* Pager */}
         <div className="flex items-center justify-between p-3 text-sm text-zinc-600">
           <div>Total: {total}</div>
           <div className="flex items-center gap-2">
-            <button
-              className="border rounded px-2 py-1"
-              disabled={page <= 1}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-            >
-              Prev
-            </button>
+            <button className="border rounded px-2 py-1" disabled={page <= 1}
+              onClick={() => setPage(p => Math.max(1, p - 1))}>Prev</button>
             <span>Page {page} / {totalPages}</span>
-            <button
-              className="border rounded px-2 py-1"
-              disabled={page >= totalPages}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            >
-              Next
-            </button>
+            <button className="border rounded px-2 py-1" disabled={page >= totalPages}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next</button>
           </div>
         </div>
       </Card>

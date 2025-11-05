@@ -5,23 +5,9 @@ import { stackClientApp } from "./lib/stackClientApp.js";
 
 import { useEffect, useState } from "react";
 import {
-  Bell,
-  Download,
-  Grid2X2,
-  Activity,
-  LineChart,
-  Users,
-  History,
-  Settings,
-  LogOut,
-  LayoutDashboard,
-  ClipboardList,
-  Upload as UploadIcon,
-  Megaphone,
-  UserCircle,
-  FileText,
-  FilePlus2,
-  Database,
+  Bell, Download, Grid2X2, Activity, LineChart, Users, History,
+  Settings, LogOut, LayoutDashboard, ClipboardList, Upload as UploadIcon,
+  Megaphone, UserCircle, FileText, FilePlus2, Database
 } from "lucide-react";
 
 // Login page
@@ -31,6 +17,7 @@ import Login from "./pages/Login.jsx";
 import Overview from "./pages/admin/Overview.jsx";
 import Completion from "./pages/admin/Completion.jsx";
 import Predictive from "./pages/admin/Predictive.jsx";
+import Prescriptive from "./pages/admin/Prescriptive.jsx"; // <-- NEW
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
 import AdminProfile from "./pages/admin/AdminProfile.jsx";
@@ -84,9 +71,10 @@ export default function App() {
 
 function MainApp() {
   // ====== Persistent tab states ======
-  const [active, setActive] = useState(() => localStorage.getItem("admin_active") || "overview");
-  const [activeField, setActiveField] = useState(() => localStorage.getItem("field_active") || "home");
-  const [activeAnalyst, setActiveAnalyst] = useState(() => localStorage.getItem("analyst_active") || "a_home");
+  const [active, setActive] = useState("overview"); 
+const [activeField, setActiveField] = useState("home");  // field tabs
+  const [activeAnalyst, setActiveAnalyst] = useState("a_home"); // analyst tabs
+
 
   // ====== User ======
   const [user, setUser] = useState(() => {
@@ -280,11 +268,19 @@ function MainApp() {
         </div>
 
         <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-          <SideLink icon={<Grid2X2 size={18} />} label="Overview" active={active === "overview"} onClick={() => setActive("overview")} />
-          <SideLink icon={<Activity size={18} />} label="Completion" active={active === "completion"} onClick={() => setActive("completion")} />
-          <SideLink icon={<LineChart size={18} />} label="Predictive Insights" active={active === "predictive"} onClick={() => setActive("predictive")} />
-          <SideLink icon={<Users size={18} />} label="Field Management" active={active === "field"} onClick={() => setActive("field")} />
-          <SideLink icon={<History size={18} />} label="Audit Trail" active={active === "audit"} onClick={() => setActive("audit")} />
+          <SideLink icon={<Grid2X2 size={18} />} label="Overview"
+            active={active === "overview"} onClick={() => setActive("overview")} />
+          <SideLink icon={<Activity size={18} />} label="Completion"
+            active={active === "completion"} onClick={() => setActive("completion")} />
+          <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
+            active={active === "predictive"} onClick={() => setActive("predictive")} />
+          <SideLink icon={<Lightbulb size={18} />} label="Prescriptive Insights"   // <-- NEW
+            active={active === "prescriptive"} onClick={() => setActive("prescriptive")} />
+          <SideLink icon={<Users size={18} />} label="Field Management"
+            active={active === "field"} onClick={() => setActive("field")} />
+          <SideLink icon={<History size={18} />} label="Audit Trail"
+            active={active === "audit"} onClick={() => setActive("audit")} />
+
           <div className="pt-2">
             <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">System</div>
             <SideLink icon={<UserCircle size={18} />} label="Profile" active={active === "profile"} onClick={() => setActive("profile")} />
@@ -341,6 +337,7 @@ function MainApp() {
           )}
           {active === "completion" && <Completion />}
           {active === "predictive" && <Predictive />}
+          {active === "prescriptive" && <Prescriptive />} {/* <-- NEW */}
           {active === "field" && <FieldMgmt />}
           {active === "audit" && <AuditTrail />}
           {active === "profile" && <AdminProfile user={user} />}
@@ -354,10 +351,10 @@ function SideLink({ icon, label, active, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={[
+      className={clsx(
         "w-full text-left px-3 py-2 rounded-xl text-sm text-white/90 hover:bg-white/10",
-        active ? "bg-white/15 text-white font-semibold" : "",
-      ].join(" ")}
+        active && "bg-white/15 text-white font-semibold"
+      )}
     >
       <span className="mr-3 inline-grid place-items-center">{icon}</span>
       <span className="truncate">{label}</span>
