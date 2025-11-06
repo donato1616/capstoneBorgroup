@@ -57,10 +57,40 @@ function renderDetails(row) {
   return parts.length ? parts.join(" • ") : (row.payload ? JSON.stringify(row.payload) : "—");
 }
 
+// Simple DatasetSelector that reads datasets from parent via props
+function DatasetSelector({ datasets = [], value, onSelectDataset }) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-sm">Dataset:</label>
+      <select
+        className="border rounded px-2 py-1"
+        value={value}
+        onChange={(e) => onSelectDataset(e.target.value)}
+      >
+        <option value="">-- select dataset --</option>
+        {datasets.map(d => (
+          <option key={d.dataset_id} value={d.dataset_id}>
+            {d.name ?? d.dataset_id}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export default function AuditTrail() {
   const [datasetId, setDatasetId] = useState("");
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
+
+  // new state: datasets + facets + filters
+  const [datasets, setDatasets] = useState([]);
+  const [actors, setActors] = useState([]);
+  const [actions, setActions] = useState([]);
+  const [actor, setActor] = useState("");
+  const [action, setAction] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
 
   // paging + loading
   const [limit, setLimit] = useState(50);
@@ -70,7 +100,7 @@ export default function AuditTrail() {
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
   useEffect(() => {
-    if (!datasetId) { setItems([]); setTotal(0); return; }
+    // fetch facets + datasets on mount
     (async () => {
       try {
         const fac = await getAuditFacets();
@@ -129,11 +159,11 @@ export default function AuditTrail() {
         setLoading(false);
       }
     })();
-  }, [datasetId, limit, offset]);
+  }, [datasetId, limit, offset, actor, action, from, to]);
 
   return (
     <div className="space-y-4">
-      <DatasetSelector onSelectDataset={(id) => { setDatasetId(id); setPage(1); }} />
+      <DatasetSelector datasets={datasets} value={datasetId} onSelectDataset={(id) => { setDatasetId(id); setPage(1); }} />
 
       <Card>
         <div className="p-4 border-b text-sm font-medium">Audit Trail & Open Issues</div>
