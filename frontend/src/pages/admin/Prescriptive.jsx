@@ -1,4 +1,3 @@
-// frontend/src/pages/admin/Prescriptive.jsx
 import { useEffect, useMemo, useState } from "react";
 import DatasetSelector from "../../components/DatasetSelector";
 
@@ -7,7 +6,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5050";
 export default function PrescriptiveInsights() {
   const [datasetId, setDatasetId] = useState("");
   const [target, setTarget] = useState(200);
-  const [deadline, setDeadline] = useState(() => new Date(Date.now() + 7*86400000).toISOString().slice(0,10));
+  const [deadline, setDeadline] = useState(() => new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));
   const [rate, setRate] = useState(8);
   const [workdays, setWorkdays] = useState(6);
   const [plan, setPlan] = useState(null);
@@ -20,7 +19,11 @@ export default function PrescriptiveInsights() {
 
   async function compute() {
     if (!canCompute) return;
-    setLoading(true); setErr(""); setPlan(null); setAlloc(null); setInsights(null);
+    setLoading(true);
+    setErr("");
+    setPlan(null);
+    setAlloc(null);
+    setInsights(null);
     try {
       // 1) staffing
       const u1 = new URL(`${API_BASE}/api/dataset/${datasetId}/prescriptive/staffing`);
@@ -28,6 +31,7 @@ export default function PrescriptiveInsights() {
       u1.searchParams.set("deadline", deadline);
       u1.searchParams.set("rate", String(rate));
       u1.searchParams.set("workdays", String(workdays));
+
       const r1 = await fetch(u1);
       if (!r1.ok) throw new Error(`Staffing HTTP ${r1.status}`);
       setPlan(await r1.json());
@@ -68,28 +72,46 @@ export default function PrescriptiveInsights() {
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 mt-3">
           <label className="text-sm">
             Target completes
-            <input type="number" className="block w-full border rounded px-2 py-1 mt-1"
-                   value={target} onChange={e=>setTarget(Number(e.target.value||0))}/>
+            <input
+              type="number"
+              className="block w-full border rounded px-2 py-1 mt-1"
+              value={target}
+              onChange={(e) => setTarget(Number(e.target.value || 0))}
+            />
           </label>
           <label className="text-sm">
             Deadline (YYYY-MM-DD)
-            <input type="date" className="block w-full border rounded px-2 py-1 mt-1"
-                   value={deadline} onChange={e=>setDeadline(e.target.value)}/>
+            <input
+              type="date"
+              className="block w-full border rounded px-2 py-1 mt-1"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+            />
           </label>
           <label className="text-sm">
             Rate (interviews / interviewer / day)
-            <input type="number" className="block w-full border rounded px-2 py-1 mt-1"
-                   value={rate} onChange={e=>setRate(Number(e.target.value||0))}/>
+            <input
+              type="number"
+              className="block w-full border rounded px-2 py-1 mt-1"
+              value={rate}
+              onChange={(e) => setRate(Number(e.target.value || 0))}
+            />
           </label>
           <label className="text-sm">
             Workdays / week
-            <input type="number" className="block w-full border rounded px-2 py-1 mt-1"
-                   value={workdays} onChange={e=>setWorkdays(Number(e.target.value||0))}/>
+            <input
+              type="number"
+              className="block w-full border rounded px-2 py-1 mt-1"
+              value={workdays}
+              onChange={(e) => setWorkdays(Number(e.target.value || 0))}
+            />
           </label>
           <div className="flex items-end">
-            <button className="px-3 py-2 rounded bg-olive-700 text-white disabled:opacity-60"
-                    disabled={!canCompute || loading}
-                    onClick={compute}>
+            <button
+              className="px-3 py-2 rounded bg-olive-700 text-white disabled:opacity-60"
+              disabled={!canCompute || loading}
+              onClick={compute}
+            >
               {loading ? "Computing..." : "Compute plan"}
             </button>
           </div>
@@ -171,11 +193,12 @@ export default function PrescriptiveInsights() {
             {insights.recommendations.map((r, i) => (
               <li key={i} className="p-3 rounded-lg border">
                 <div className="flex items-center gap-2">
-                  <span className={
-                    "inline-block h-2 w-2 rounded-full " +
-                    (r.priority === "high" ? "bg-rose-500"
-                      : r.priority === "medium" ? "bg-amber-500" : "bg-emerald-500")
-                  }/>
+                  <span
+                    className={
+                      "inline-block h-2 w-2 rounded-full " +
+                      (r.priority === "high" ? "bg-rose-500" : r.priority === "medium" ? "bg-amber-500" : "bg-emerald-500")
+                    }
+                  />
                   <div className="font-medium">{r.title}</div>
                   <div className="text-xs text-zinc-500 ml-2">({r.priority})</div>
                 </div>
@@ -185,7 +208,7 @@ export default function PrescriptiveInsights() {
           </ul>
 
           <div className="mt-4 text-xs text-zinc-500">
-            Inputs: target {insights.inputs.target}, deadline {insights.inputs.deadline}, rate {insights.inputs.rate}/day, workdays {insights.inputs.workdays}/week. 
+            Inputs: target {insights.inputs.target}, deadline {insights.inputs.deadline}, rate {insights.inputs.rate}/day, workdays {insights.inputs.workdays}/week.
             Metrics: trailing7_avg {insights.metrics.trailing7_avg}/day, required_rate {insights.metrics.required_rate}/day.
           </div>
         </div>

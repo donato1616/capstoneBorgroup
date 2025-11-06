@@ -46,7 +46,14 @@ export default function PredictiveInsights() {
         setLoading(true); setErr(''); setData(null);
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/predict/regression`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        setData(await res.json());
+        const data = await res.json();
+        
+        // Check if the data is reliable (no extreme values or NaN)
+        if (!data?.metrics?.r2 || !data?.metrics?.rmse) {
+          throw new Error('Invalid data returned, metrics missing or NaN.');
+        }
+  
+        setData(data);
       } catch (e) {
         console.error(e);
         setErr(e.message || 'Failed to load dataset');
@@ -88,7 +95,13 @@ export default function PredictiveInsights() {
         url.searchParams.set('interval', numInterval);
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        setNumData(await res.json());
+        const numData = await res.json();
+  
+        // Validate if data is structured correctly and contains the required fields
+        if (!numData?.history?.length || !numData?.horizon?.length) {
+          throw new Error('No valid forecast data returned.');
+        }
+        setNumData(numData);
       } catch (e) {
         console.error(e);
         setNumErr(e.message || 'Failed to load numeric forecast');
@@ -97,7 +110,6 @@ export default function PredictiveInsights() {
       }
     })();
   }, [datasetId, qNum, numAgg, numInterval, mode]);
-
   // ---------- fetch categorical question forecast ----------
   useEffect(() => {
     if (!datasetId || !qCat || mode !== 'categorical') { setCatData(null); return; }
@@ -111,7 +123,13 @@ export default function PredictiveInsights() {
         url.searchParams.set('as_share', catAsShare ? '1' : '0');
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        setCatData(await res.json());
+        const catData = await res.json();
+  
+        // Validate if the data has labels and series to render
+        if (!catData?.labels?.length || !catData?.series) {
+          throw new Error('No valid categorical data returned.');
+        }
+        setCatData(catData);
       } catch (e) {
         console.error(e);
         setCatErr(e.message || 'Failed to load categorical forecast');
@@ -120,7 +138,6 @@ export default function PredictiveInsights() {
       }
     })();
   }, [datasetId, qCat, catInterval, catTopK, catAsShare, mode]);
-
   // ---------------- common helpers ----------------
   const fmt = (v, d = 3) => (v == null ? '—' : Number(v).toFixed(d));
   const unit   = data?.unit || 'respondents/day';
@@ -241,6 +258,10 @@ export default function PredictiveInsights() {
           <Card className="p-4"><div className="text-xs text-zinc-500">MSE</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.mse)}</div></Card>
           <Card className="p-4"><div className="text-xs text-zinc-500">RMSE ({unit})</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.rmse)}</div></Card>
           <Card className="p-4"><div className="text-xs text-zinc-500">Baseline RMSE ({unit})</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.baseline_rmse)}</div></Card>
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">MASE</div>
+            <div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.mase)}</div>
+        </Card>
           <Card className="p-4"><div className="text-xs text-zinc-500">Improvement vs Baseline</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.improvement_vs_baseline == null ? '—' : `${(data.metrics.improvement_vs_baseline * 100).toFixed(1)}%`}</div></Card>
           <Card className="p-4"><div className="text-xs text-zinc-500">MAPE</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.mape == null ? '—' : `${(data.metrics.mape * 100).toFixed(1)}%`}</div></Card>
           <Card className="p-4"><div className="text-xs text-zinc-500">sMAPE (bounded)</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.smape == null ? '—' : `${(data.metrics.smape * 100).toFixed(1)}%`}</div></Card>

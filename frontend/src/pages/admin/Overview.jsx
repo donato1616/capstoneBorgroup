@@ -27,7 +27,7 @@ export default function Overview({ selectedDataset }) {
   // load summary + regions + question list
   useEffect(() => {
     if (!selectedDataset) {
-      setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
+      setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({ numeric_bins: [], text_top: [] });
       return;
     }
     (async () => {
@@ -42,14 +42,14 @@ export default function Overview({ selectedDataset }) {
         setSummary(s);
         setRegionCompleted((reg.items || []).map(r => ({ label: r.region, value: r.completed })));
 
-        const qs = (q.items?.length ? q.items : s.top_questions || []).map(x => x.question ? x : {question: x});
+        const qs = (q.items?.length ? q.items : s.top_questions || []).map(x => x.question ? x : { question: x });
         setQuestions(qs);
         setQCode(qs?.[0]?.question || "");
 
       } catch (e) {
         console.error("overview load failed", e);
         setErr("Failed to load summary");
-        setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({numeric_bins:[], text_top:[]});
+        setSummary(null); setRegionCompleted([]); setQuestions([]); setQCode(""); setQDist({ numeric_bins: [], text_top: [] });
       } finally {
         setLoading(false);
       }
@@ -87,6 +87,14 @@ export default function Overview({ selectedDataset }) {
       alert("Delete failed: " + e.message);
     }
   }
+
+  // Function to generate gradient based on index
+  const generateBarColor = (index, total) => {
+    const greenStart = 0; // Starting point of green color
+    const greenEnd = 255; // Ending point of green color
+    const colorValue = Math.floor(greenStart + (greenEnd - greenStart) * (index / total));
+    return `rgb(${colorValue}, ${255 - colorValue}, ${colorValue})`;
+  };
 
   return (
     <div className="space-y-6">
@@ -141,7 +149,13 @@ export default function Overview({ selectedDataset }) {
         <div className="text-sm font-medium mb-2">Survey completed by region</div>
         {regionCompleted.length === 0
           ? <div className="text-sm text-zinc-500">No region data / no dated interviews.</div>
-          : <BarSimple data={regionCompleted} xKey="label" yKey="value" height={260} />
+          : <BarSimple
+              data={regionCompleted}
+              xKey="label"
+              yKey="value"
+              height={260}
+              barColor={(index) => generateBarColor(index, regionCompleted.length)} // Apply gradient color to each bar
+            />
         }
       </Card>
 

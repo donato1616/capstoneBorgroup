@@ -42,6 +42,28 @@ const diskUpload = multer({
 function getUploadMiddleware() {
   return UPLOAD_STORAGE === 'memory' ? memoryUpload.single('file') : diskUpload.single('file');
 }
+// --------- Outlier Removal and Feature Engineering ---------
+
+// Remove outliers based on Interquartile Range (IQR)
+function removeOutliers(data) {
+  const Q1 = data[Math.floor(data.length / 4)];
+  const Q3 = data[Math.floor(3 * data.length / 4)];
+  const IQR = Q3 - Q1;
+  const lowerBound = Q1 - 1.5 * IQR;
+  const upperBound = Q3 + 1.5 * IQR;
+
+  return data.filter(value => value >= lowerBound && value <= upperBound);
+}
+
+// Feature engineering: Add time-based features (week, month, year)
+function addTimeFeatures(data) {
+  return data.map(row => ({
+    ...row,
+    weekOfYear: new Date(row.date).getWeek(), // Week of year feature
+    month: new Date(row.date).getMonth(),     // Month of the year feature
+    year: new Date(row.date).getFullYear(),   // Year feature
+  }));
+}
 
 // ---------------------------- helpers ----------------------------
 function parseId(reqParam) {
@@ -119,21 +141,23 @@ function prettyQuestionLabel(code, sampleText) {
 // --------- OLS helpers (shared by multiple endpoints) ---------
 function olsFit(points) {
   const n = points.length;
-  const sx = points.reduce((s,p)=>s+p.x,0);
-  const sy = points.reduce((s,p)=>s+p.y,0);
-  const sxx= points.reduce((s,p)=>s+p.x*p.x,0);
-  const sxy= points.reduce((s,p)=>s+p.x*p.y,0);
+  const sx  = points.reduce((s,p)=>s + p.x, 0);
+  const sy  = points.reduce((s,p)=>s + p.y, 0);
+  const sxx = points.reduce((s,p)=>s + p.x*p.x, 0);
+  const sxy = points.reduce((s,p)=>s + p.x*p.y, 0);
   const denom = (n * sxx - sx * sx) || 1;
+
   const a = (n * sxy - sx * sy) / denom;
   const b = (sy - a * sx) / n;
-  const yhat = points.map(p => a * p.x + b);
+
+  // predictions (keep non-negative), DO NOT round here so errors are unbiased
+  const yhat = points.map(p => Math.max(0, a * p.x + b));
   const ybar = sy / n;
 
-  const yhatClamp = yhat.map(v => Math.max(0, v));
-
-  const mse   = points.reduce((s,p,i)=> s + Math.pow(p.y - yhatClamp[i], 2), 0) / n;
-  const rmse  = Math.sqrt(mse);
-  const ssRes = points.reduce((s,p,i)=> s + Math.pow(p.y - yhatClamp[i], 2), 0);
+  // ---- standard errors ----
+  const mse  = points.reduce((s,p,i)=> s + Math.pow(p.y - yhat[i], 2), 0) / n;
+  const rmse = Math.sqrt(mse);
+  const ssRes = points.reduce((s,p,i)=> s + Math.pow(p.y - yhat[i], 2), 0);
   const ssTot = points.reduce((s,p)=> s + Math.pow(p.y - ybar, 2), 0) || 1;
   const r2    = 1 - (ssRes / ssTot);
 
@@ -141,24 +165,41 @@ function olsFit(points) {
   const baselineRMSE = Math.sqrt(baselineMSE);
   const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
 
-  const EPS = 1e-9;
-  const mae  = points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0) / n;
-  const wape = (points.reduce((s,p,i)=> s + Math.abs(p.y - Math.round(yhatClamp[i])), 0)) / ((points.reduce((s,p)=> s + Math.abs(p.y), 0)) || 1);
+  const mae  = points.reduce((s,p,i)=> s + Math.abs(p.y - yhat[i]), 0) / n;
+  const wape = points.reduce((s,p,i)=> s + Math.abs(p.y - yhat[i]), 0) /
+               (points.reduce((s,p)=> s + Math.abs(p.y), 0) || 1);
 
-  const mapeArr = points.map((p,i)=> p.y !== 0 ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
+  const mapeArr = points.map((p,i)=> p.y !== 0 ? Math.abs((p.y - yhat[i]) / p.y) : null).filter(v=>v!==null);
   const mape    = mapeArr.length ? (mapeArr.reduce((s,v)=>s+v,0)/mapeArr.length) : null;
 
   const MAPE_FLOOR = 5;
-  const mapeFloorArr = points.map((p,i)=> p.y >= MAPE_FLOOR ? Math.abs((p.y - yhatClamp[i]) / p.y) : null).filter(v=>v!==null);
+  const mapeFloorArr = points.map((p,i)=> p.y >= MAPE_FLOOR ? Math.abs((p.y - yhat[i]) / p.y) : null).filter(v=>v!==null);
   const mape_floor5 = mapeFloorArr.length ? (mapeFloorArr.reduce((s,v)=>s+v,0)/mapeFloorArr.length) : null;
 
+  const EPS = 1e-9;
   const smapeArr = points.map((p,i)=>{
-    const denom = Math.abs(p.y) + Math.abs(yhatClamp[i]) + EPS;
-    return (2 * Math.abs(p.y - yhatClamp[i])) / denom;
+    const denom = Math.abs(p.y) + Math.abs(yhat[i]) + EPS;
+    return (2 * Math.abs(p.y - yhat[i])) / denom;
   });
   const smape = smapeArr.reduce((s,v)=>s+v,0)/smapeArr.length;
 
-  return { a, b, yhat: yhatClamp, r2, mse, rmse, baselineMSE, baselineRMSE, improvement, mae, wape, mape, mape_floor5, smape };
+  // ---- MASE (Mean Absolute Scaled Error) ----
+  // Scale by the in-sample naive (lag-1) MAE. If flat series -> null.
+  let mase = null, mase_denom = null;
+  if (n >= 2) {
+    const denomAbs = points.slice(1).reduce((s,p,i)=> s + Math.abs(p.y - points[i].y), 0) / (n - 1);
+    mase_denom = denomAbs > 0 ? denomAbs : null;
+    if (mase_denom) mase = mae / mase_denom;
+  }
+
+  return {
+    a, b,
+    yhat,
+    r2, mse, rmse,
+    baselineMSE, baselineRMSE, improvement,
+    mae, wape, mape, mape_floor5, smape,
+    mase, mase_denom
+  };
 }
 function makeHorizon(lastDateISO, lastX, a, b, steps=7, interval='day') {
   const out = [];
@@ -257,10 +298,18 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
     if (!rows?.length) return res.status(400).json({ error: 'No data rows detected' });
 
     // transform -> facts
+   // transform -> facts, apply outlier removal and feature engineering
     let facts = [], issues = [];
     try {
       const out = consolidateRows(rows, {}, normMap);
-      facts = out.facts || []; issues = out.issues || [];
+      facts = out.facts || []; 
+      issues = out.issues || [];
+
+      // Remove outliers
+      facts = removeOutliers(facts);
+
+      // Apply feature engineering
+      facts = addTimeFeatures(facts);
     } catch (e) {
       return res.status(500).json({ error: 'Transform failed', detail: e.message });
     }
@@ -297,22 +346,22 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
           };
         });
 
-        await client.responseFact.createMany({
-          data: mapped,
-          skipDuplicates: SKIP_DUPLICATES
-        });
-        tick(`inserted ${Math.min(i + mapped.length, facts.length)}/${facts.length}`);
-      }
-    };
+    await client.responseFact.createMany({
+      data: mapped,
+      skipDuplicates: SKIP_DUPLICATES
+    });
+    tick(`inserted ${Math.min(i + mapped.length, facts.length)}/${facts.length}`);
+  }
+};
 
     if (USE_TX) {
       await prisma.$transaction(async (tx) => { await doInsertBatches(tx); });
     } else {
       await doInsertBatches(prisma);
     }
-
+    
     console.log(`[upload] total: ${Date.now() - T0}ms`);
-
+      
     res.json({
       status: 'ok',
       dataset_id: ds.id,
@@ -321,6 +370,7 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
       issues_count: issues.length,
       file_info: { name: fname, size_bytes: req.file.size, mimetype: req.file.mimetype }
     });
+
   } catch (e) {
     if (e && e.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({
@@ -744,37 +794,45 @@ router.get('/:id/predict/regression', async (req, res) => {
     const fit = olsFit(pts);
 
     // holdout (last 20%, min 2)
-    let oos = { rmse: null, mape: null, smape: null, r2: null };
-    if (!synthetic && n >= 5) {
-      const h = Math.max(2, Math.floor(0.2 * n));
-      const train = pts.slice(0, n - h);
-      const test  = pts.slice(n - h);
+let oos = { rmse: null, mape: null, smape: null, r2: null, mase: null };
+if (!synthetic && n >= 5) {
+  const h = Math.max(2, Math.floor(0.2 * n));
+  const train = pts.slice(0, n - h);
+  const test  = pts.slice(n - h);
 
-      const tfit = olsFit(train);
-      const testY    = test.map(p => p.y);
-      const testYhat = test.map((p,i) => Math.max(0, tfit.a * p.x + tfit.b));
+  const tfit = olsFit(train);
+  const testY    = test.map(p => p.y);
+  const testYhat = test.map((p,i) => Math.max(0, tfit.a * p.x + tfit.b));
 
-      const tmse  = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0) / test.length;
-      const trmse = Math.sqrt(tmse);
+  const tmse  = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0) / test.length;
+  const trmse = Math.sqrt(tmse);
 
-      const tmapeArr = testY.map((v,i)=> v !== 0 ? Math.abs((v - testYhat[i]) / v) : null).filter(v=>v!==null);
-      const tmape    = tmapeArr.length ? (tmapeArr.reduce((s,v)=>s+v,0)/tmapeArr.length) : null;
+  const tmapeArr = testY.map((v,i)=> v !== 0 ? Math.abs((v - testYhat[i]) / v) : null).filter(v=>v!==null);
+  const tmape    = tmapeArr.length ? (tmapeArr.reduce((s,v)=>s+v,0)/tmapeArr.length) : null;
 
-      const EPS = 1e-9;
-      const tsmapeArr= testY.map((v,i)=>{
-        const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
-        return (2 * Math.abs(v - testYhat[i])) / denom;
-      });
-      const tsmape = tsmapeArr.reduce((s,v)=>s+v,0) / tsmapeArr.length;
+  const EPS = 1e-9;
+  const tsmapeArr= testY.map((v,i)=>{
+    const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
+    return (2 * Math.abs(v - testYhat[i])) / denom;
+  });
+  const tsmape = tsmapeArr.reduce((s,v)=>s+v,0) / tsmapeArr.length;
 
-      const tybar = testY.reduce((s,v)=>s+v,0) / test.length;
-      const tssRes = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0);
-      const tssTot = testY.reduce((s,v)=> s + Math.pow(v - tybar, 2), 0) || 1;
-      const tr2    = 1 - (tssRes / tssTot);
+  const tybar = testY.reduce((s,v)=>s+v,0) / test.length;
+  const tssRes = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0);
+  const tssTot = testY.reduce((s,v)=> s + Math.pow(v - tybar, 2), 0) || 1;
+  const tr2    = 1 - (tssRes / tssTot);
 
-      oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2 };
-    }
+  // OOS MASE: scale with TRAIN naive MAE (per Hyndman)
+  let trainNaive = null;
+  if (train.length >= 2) {
+    const denomAbs = train.slice(1).reduce((s,p,i)=> s + Math.abs(p.y - train[i].y), 0) / (train.length - 1);
+    trainNaive = denomAbs > 0 ? denomAbs : null;
+  }
+  const testMAE = testY.reduce((s,v,i)=> s + Math.abs(v - testYhat[i]), 0) / testY.length;
+  const tmase   = (trainNaive && Number.isFinite(testMAE)) ? (testMAE / trainNaive) : null;
 
+  oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2, mase: tmase };
+}
     const horizon = makeHorizon(pts[pts.length - 1].date, pts[pts.length - 1].x, fit.a, fit.b, 7, 'day');
 
     res.json({
@@ -788,7 +846,9 @@ router.get('/:id/predict/regression', async (req, res) => {
         improvement_vs_baseline: fit.improvement,
         mae: fit.mae, wape: fit.wape,
         mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape,
-        oos_rmse: oos.rmse, oos_mape: oos.mape, oos_smape: oos.smape, oos_r2: oos.r2
+        mase: fit.mase,                              // <— already present in your snippet
+        oos_rmse: oos.rmse, oos_mape: oos.mape, oos_smape: oos.smape, oos_r2: oos.r2,
+        oos_mase: oos.mase                           // <— add this
       },
       history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
       horizon
@@ -983,11 +1043,12 @@ router.get('/:id/predict/question/numeric', async (req, res) => {
       dataset_id: id, question: q, agg, interval,
       synthetic: false,
       metrics: {
-        r2: fit.r2, mse: fit.mse, rmse: fit.rmse,
+        r2: fit.r2, rmse: fit.rmse, mse: fit.mse,
         baseline_rmse: fit.baselineRMSE,
         improvement_vs_baseline: fit.improvement,
-        mae: fit.mae, wape: fit.wape,
-        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape
+        mae: fit.mae, wape: fit.wape,               // (if you keep them)
+        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape,
+        mase: fit.mase                               // <— add this
       },
       history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
       horizon
@@ -1095,128 +1156,641 @@ router.get('/:id/predict/question/categorical', async (req, res) => {
   }
 });
 
-// ==================== PRESCRIPTIVE ROUTES ====================
+// ==================== PRESCRIPTIVE HELPERS (shared) ====================
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+function parseIntOr(v, d) { const n = Number(v); return Number.isFinite(n) ? Math.floor(n) : d; }
+function parseFloatOr(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 
-// GET /api/dataset/:id/prescriptive/staffing?target=200&deadline=YYYY-MM-DD&rate=8&workdays=6
-// Simple capacity-based planner: compute # of interviewers needed and a flat daily plan.
-router.get('/:id/prescriptive/staffing', async (req, res) => {
+function quantile(sortedArr, q) {
+  if (!sortedArr.length) return 0;
+  const pos = (sortedArr.length - 1) * q;
+  const base = Math.floor(pos), rest = pos - base;
+  if (sortedArr[base + 1] !== undefined) return sortedArr[base] + rest * (sortedArr[base+1] - sortedArr[base]);
+  return sortedArr[base];
+}
+
+async function kpiCompletion(prisma, datasetId, densityPct) {
+  const totalRes = await prisma.$queryRaw`
+    SELECT COUNT(DISTINCT "respondentId")::int AS n
+    FROM "ResponseFact" WHERE "datasetId" = ${datasetId}
+  `;
+  const respondent_count = totalRes?.[0]?.n || 0;
+
+  const hard = await prisma.$queryRaw`
+    SELECT COUNT(DISTINCT "respondentId")::int AS n
+    FROM "ResponseFact"
+    WHERE "datasetId" = ${datasetId}
+      AND (
+        "interviewDate" IS NOT NULL
+        OR lower(
+             COALESCE(
+               "cleanJson"->>'completed',
+               "rawJson"  ->>'completed',
+               "rawJson"  ->>'Completion',
+               "rawJson"  ->>'Completed',
+               "rawJson"  ->>'Status'
+             )
+           ) ~ '(?:^|\\b)(1|true|yes|completed|complete|done|finished|ok)(?:\\b|$)'
+      )
+  `;
+  const hardN = hard?.[0]?.n || 0;
+
+  let completed_respondents = hardN;
+  let completion_method = 'dated_or_flagged';
+
+  if (hardN === 0) {
+    const soft = await prisma.$queryRaw`
+      WITH per AS (
+        SELECT "respondentId", COUNT(*)::int AS c
+        FROM "ResponseFact" WHERE "datasetId" = ${datasetId}
+        GROUP BY "respondentId"
+      ),
+      m AS (SELECT MAX(c) AS mx FROM per)
+      SELECT COUNT(*)::int AS n
+      FROM per, m
+      WHERE per.c >= GREATEST(1, FLOOR(${densityPct} * m.mx))
+    `;
+    completed_respondents = soft?.[0]?.n || 0;
+    completion_method = `soft_density_${Math.round(densityPct*100)}pct`;
+  }
+
+  const completed_pct = respondent_count ? (100 * completed_respondents / respondent_count) : 0;
+  return { respondent_count, completed_respondents, completed_pct, completion_method };
+}
+
+async function dailySeries(prisma, datasetId) {
+  const rows = await prisma.$queryRaw`
+    SELECT DATE("interviewDate") AS d,
+           COUNT(DISTINCT "respondentId")::int AS c
+    FROM "ResponseFact"
+    WHERE "datasetId" = ${datasetId} AND "interviewDate" IS NOT NULL
+    GROUP BY d
+    ORDER BY d
+  `;
+  return (rows || []).map(r => ({ date: String(r.d), count: Number(r.c || 0) }));
+}
+
+async function regionCounts(prisma, datasetId, limit = 20) {
+  const rows = await prisma.$queryRaw`
+    SELECT COALESCE(region,'Unspecified') AS region,
+           COUNT(DISTINCT "respondentId")::int AS cnt
+    FROM "ResponseFact"
+    WHERE "datasetId" = ${datasetId} AND "interviewDate" IS NOT NULL
+    GROUP BY region
+    ORDER BY cnt DESC
+    LIMIT ${parseInt(limit, 10)}
+  `;
+  return (rows || []).map(r => ({ region: r.region, cnt: Number(r.cnt || 0) }));
+}
+
+async function dowHourGrid(prisma, datasetId) {
+  const rows = await prisma.$queryRaw`
+    SELECT
+      EXTRACT(DOW FROM "interviewDate")::int AS dow,
+      EXTRACT(HOUR FROM "interviewDate")::int AS hour,
+      COUNT(DISTINCT "respondentId")::int AS cnt
+    FROM "ResponseFact"
+    WHERE "datasetId" = ${datasetId} AND "interviewDate" IS NOT NULL
+    GROUP BY dow, hour
+    ORDER BY dow, hour
+  `;
+  return (rows || []).map(r => ({ dow: Number(r.dow), hour: Number(r.hour), cnt: Number(r.cnt || 0) }));
+}
+
+async function interviewerDist(prisma, datasetId) {
+  const rows = await prisma.$queryRaw`
+    SELECT COALESCE(interviewer,'Unspecified') AS iv,
+           COUNT(DISTINCT "respondentId")::int AS cnt
+    FROM "ResponseFact"
+    WHERE "datasetId" = ${datasetId} AND "interviewDate" IS NOT NULL
+    GROUP BY iv
+  `;
+  const arr = (rows || []).map(r => Number(r.cnt || 0)).filter(Number.isFinite).sort((a,b)=>a-b);
+  return arr;
+}
+
+async function lowCoverageQuestions(prisma, datasetId, topN = 5) {
+  const rows = await prisma.$queryRaw`
+    WITH per_q AS (
+      SELECT "questionCode" AS q, COUNT(DISTINCT "respondentId")::int AS n
+      FROM "ResponseFact" WHERE "datasetId" = ${datasetId}
+      GROUP BY "questionCode"
+    )
+    SELECT q, n FROM per_q WHERE q IS NOT NULL ORDER BY n ASC NULLS LAST LIMIT ${parseInt(topN,10)}
+  `;
+  return (rows || []).map(r => ({ question: r.q, n: Number(r.n || 0) }));
+}
+
+// Try to auto-detect a satisfaction metric: a numeric question mostly 1..5 (CSAT-like)
+async function detectCSAT(prisma, datasetId) {
+  const rows = await prisma.$queryRawUnsafe(`
+    WITH base AS (
+      SELECT
+        "questionCode" AS q,
+        CASE
+          WHEN "answerNum" IS NOT NULL THEN "answerNum"
+          WHEN "answerText" ~ '^[\\s]*[+\\-]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?\\s*%?[\\s]*$'
+            THEN REGEXP_REPLACE(LOWER("answerText"), '[,%]', '', 'g')::numeric
+          ELSE NULL
+        END AS val
+      FROM "ResponseFact"
+      WHERE "datasetId" = $1
+    ),
+    agg AS (
+      SELECT q,
+             COUNT(*)::int AS n,
+             COUNT(val)::int AS n_num,
+             COUNT(*) FILTER (WHERE val BETWEEN 1 AND 5)::int AS n_1_5,
+             AVG(val)::float8 AS avg_val
+      FROM base
+      GROUP BY q
+    )
+    SELECT q, n, n_num, n_1_5, avg_val
+    FROM agg
+    WHERE q IS NOT NULL
+    ORDER BY n_1_5 DESC, n_num DESC, n DESC
+    LIMIT 1
+  `, datasetId);
+
+  const top = rows?.[0];
+  if (!top || !top.q || !Number.isFinite(Number(top.n_1_5 || 0))) return null;
+
+  // If at least 60% of numeric answers sit in [1..5], consider this CSAT-like
+  const ratio = (Number(top.n_1_5 || 0)) / Math.max(1, Number(top.n_num || 0));
+  if (ratio < 0.6) return null;
+
+  return {
+    question: top.q,
+    avg: Number(top.avg_val || 0),
+    coverage_numeric: Number(top.n_num || 0),
+    ratio_1_5: Number(ratio)
+  };
+}
+
+function trailingAvg(arr, k) {
+  if (!arr.length) return 0;
+  const last = arr.slice(-k);
+  return last.reduce((s,r)=>s + (r.count || 0), 0) / Math.max(1, last.length);
+}
+
+function enumerateWorkdaysCount(startDate, endDate, workdaysPerWeek) {
+  const start = new Date(startDate), end = new Date(endDate);
+  let c = 0;
+  for (let cur = new Date(start); cur <= end; cur.setDate(cur.getDate() + 1)) {
+    const dow = cur.getDay(); // 0..6
+    let isWork = true;
+    if (workdaysPerWeek <= 5) isWork = (dow >= 1 && dow <= 5);
+    else if (workdaysPerWeek === 6) isWork = (dow >= 1 && dow <= 6);
+    else isWork = true;
+    if (isWork) c++;
+  }
+  return c;
+}
+
+// ==================== PRESCRIPTIVE: RULES (threshold-based) ====================
+// GET /api/dataset/:id/prescriptive/rules?csat_threshold=3&completion_threshold=0.7&coverage_threshold=0.6&imbalance_ratio=2
+router.get('/:id/prescriptive/rules', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const density = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
+    const csat_threshold = parseFloatOr(req.query.csat_threshold, 3.0);   // 1..5
+    const completion_threshold = parseFloatOr(req.query.completion_threshold, 0.70); // 0..1
+    const coverage_threshold = parseFloatOr(req.query.coverage_threshold, 0.60);     // 0..1
+    const imbalance_ratio = parseFloatOr(req.query.imbalance_ratio, 2.0);
+
+    const completion = await kpiCompletion(prisma, id, density);
+    const csat = await detectCSAT(prisma, id);
+    const regions = await regionCounts(prisma, id);
+    const byRegionTotal = regions.reduce((s,r)=>s+r.cnt,0) || 1;
+    const shares = regions.map(r => ({ region: r.region, share: r.cnt / byRegionTotal }));
+    shares.sort((a,b)=>b.share - a.share);
+
+    const lowQs = await lowCoverageQuestions(prisma, id, 8);
+
+    const alerts = [];
+
+    // Rule: low CSAT + low completion
+    if (csat && csat.avg < csat_threshold && (completion.completed_pct / 100) < completion_threshold) {
+      alerts.push({
+        rule: 'LOW_CSAT_AND_COMPLETION',
+        severity: 'high',
+        message: `Average satisfaction (${csat.avg.toFixed(2)}) < ${csat_threshold} and completion ${completion.completed_pct.toFixed(1)}% < ${Math.round(completion_threshold*100)}% — target interventions by region and interviewer.`,
+        details: { csat_question: csat.question }
+      });
+    }
+
+    // Rule: low-coverage questions
+    const coverageItems = lowQs.map(q => ({
+      question: q.question,
+      coverage_pct: completion.respondent_count ? (q.n / completion.respondent_count) : 0
+    }));
+    const poor = coverageItems.filter(x => x.coverage_pct < coverage_threshold);
+    if (poor.length) {
+      alerts.push({
+        rule: 'LOW_QUESTION_COVERAGE',
+        severity: 'high',
+        message: `Some questions have < ${Math.round(coverage_threshold*100)}% respondent coverage — enforce required fields and tighten field scripts.`,
+        details: poor.map(p => ({ question: p.question, coverage_pct: Number((p.coverage_pct*100).toFixed(1)) }))
+      });
+    }
+
+    // Rule: regional imbalance
+    if (shares.length >= 2) {
+      const top = shares[0], bottom = shares[shares.length-1];
+      if (bottom.share > 0 && (top.share / bottom.share) >= imbalance_ratio) {
+        alerts.push({
+          rule: 'REGIONAL_IMBALANCE',
+          severity: 'medium',
+          message: `Sampling is imbalanced: top region '${top.region}' share ${(top.share*100).toFixed(1)}% vs bottom '${bottom.region}' ${(bottom.share*100).toFixed(1)}% (≥${imbalance_ratio}× gap). Rebalance assignments.`,
+          details: shares.map(s => ({ region: s.region, share_pct: Number((s.share*100).toFixed(1)) }))
+        });
+      }
+    }
+
+    res.json({
+      dataset_id: id,
+      thresholds: { csat_threshold, completion_threshold, coverage_threshold, imbalance_ratio },
+      completion_kpis: completion,
+      csat: csat || null,
+      region_shares: shares,
+      alerts
+    });
+  } catch (e) {
+    console.error('prescriptive_rules_failed:', e);
+    res.status(500).json({ message: 'prescriptive_rules_failed', detail: e.message });
+  }
+});
+
+// ==================== PRESCRIPTIVE: DECISION TREE (shallow) ====================
+// Heuristic "tree": split on DOW, HOUR_BUCKET, REGION to maximize average completes per day bucket.
+// GET /api/dataset/:id/prescriptive/decision-tree?max_depth=2
+router.get('/:id/prescriptive/decision-tree', async (req, res) => {
+  try {
+    const id = parseIntOr(req.params.id, -1);
+    const max_depth = clamp(parseIntOr(req.query.max_depth, 2), 1, 3);
+
+    // Build candidate features
+    // Feature 1: day-of-week (0..6)
+    // Feature 2: hour bucket: morning (6-11), afternoon (12-16), evening (17-21), off (others)
+    // Feature 3: region (top 6 by count; rest grouped as "OTHER")
+    const grid = await dowHourGrid(prisma, id);
+    const regions = await regionCounts(prisma, id, 6);
+    const regionSet = new Set(regions.map(r => r.region));
+
+    // Build fact table keyed by (date, dow, hour_bucket, region): counts of completes
+    const rows = await prisma.$queryRaw`
+      SELECT DATE("interviewDate") AS d,
+             EXTRACT(DOW FROM "interviewDate")::int AS dow,
+             EXTRACT(HOUR FROM "interviewDate")::int AS hour,
+             COALESCE(region,'Unspecified') AS region,
+             COUNT(DISTINCT "respondentId")::int AS c
+      FROM "ResponseFact"
+      WHERE "datasetId" = ${id} AND "interviewDate" IS NOT NULL
+      GROUP BY d, dow, hour, region
+      ORDER BY d, dow, hour
+    `;
+
+    function hourBucket(h) {
+      const hh = Number(h);
+      if (hh >= 6 && hh <= 11) return 'MORNING';
+      if (hh >= 12 && hh <= 16) return 'AFTERNOON';
+      if (hh >= 17 && hh <= 21) return 'EVENING';
+      return 'OFF';
+    }
+
+    const facts = (rows || []).map(r => ({
+      date: String(r.d),
+      dow: Number(r.dow),
+      hour_bucket: hourBucket(r.hour),
+      region: regionSet.has(r.region) ? r.region : 'OTHER',
+      y: Number(r.c || 0)
+    }));
+
+    if (!facts.length) {
+      return res.json({ dataset_id: id, depth: 0, nodes: [], recommendation: null });
+    }
+
+    // Simple greedy split chooser: pick feature/value that maximizes average y
+    const dims = ['dow', 'hour_bucket', 'region'];
+
+    function bestSplit(data) {
+      let best = null;
+      for (const dim of dims) {
+        const groups = new Map();
+        for (const r of data) {
+          const k = r[dim];
+          const g = groups.get(k) || { sum:0, n:0 };
+          g.sum += r.y; g.n += 1;
+          groups.set(k, g);
+        }
+        // choose the top-mean bucket
+        for (const [val, g] of groups.entries()) {
+          const mean = g.sum / Math.max(1, g.n);
+          if (!best || mean > best.mean) best = { dim, val, mean };
+        }
+      }
+      return best; // {dim, val, mean}
+    }
+
+    function buildTree(data, depth) {
+      if (depth >= max_depth || data.length < 8) {
+        // terminal node
+        const avg = data.reduce((s,r)=>s+r.y,0)/Math.max(1,data.length);
+        return { type: 'leaf', avg: Number(avg.toFixed(2)), n: data.length };
+      }
+      const split = bestSplit(data);
+      if (!split) {
+        const avg = data.reduce((s,r)=>s+r.y,0)/Math.max(1,data.length);
+        return { type: 'leaf', avg: Number(avg.toFixed(2)), n: data.length };
+      }
+      const left = data.filter(r => r[split.dim] === split.val);
+      const right = data.filter(r => r[split.dim] !== split.val);
+      return {
+        type: 'node',
+        dim: split.dim,
+        equals: split.val,
+        mean: Number(split.mean.toFixed(2)),
+        n_left: left.length,
+        n_right: right.length,
+        left: buildTree(left, depth + 1),
+        right: buildTree(right, depth + 1)
+      };
+    }
+
+    const tree = buildTree(facts, 0);
+
+    // Derive a “next best action” from the leftmost (top-mean) path
+    function bestPath(node, conds) {
+      if (!node || node.type === 'leaf') return { conds, avg: node?.avg || 0 };
+      const pathLeft = bestPath(node.left, conds.concat([{ [node.dim]: node.equals }]));
+      const pathRight = bestPath(node.right, conds); // right means "not equals"
+      return (pathLeft.avg >= pathRight.avg) ? pathLeft : pathRight;
+    }
+    const nba = bestPath(tree, []);
+
+    res.json({
+      dataset_id: id,
+      depth: max_depth,
+      nodes: tree,
+      recommendation: {
+        conditions: nba.conds, // e.g., [{dow: 6}, {hour_bucket: 'EVENING'}, {region: 'METRO MANILA'}]
+        expected_avg_completes_per_bucket: nba.avg
+      }
+    });
+  } catch (e) {
+    console.error('prescriptive_decision_tree_failed:', e);
+    res.status(500).json({ message: 'prescriptive_decision_tree_failed', detail: e.message });
+  }
+});
+
+// ==================== PRESCRIPTIVE: INSIGHTS (text + NBA) ====================
+// GET /api/dataset/:id/prescriptive/insights?target=200&deadline=YYYY-MM-DD&rate=8&workdays=6
+router.get('/:id/prescriptive/insights', async (req, res) => {
   try {
     const id = parseId(req.params.id);
     const target = Math.max(1, Number(req.query.target || 0));
-    const rate = Math.max(1, Number(req.query.rate || 8));          // interviews per interviewer per day
-    const workdays = Math.min(7, Math.max(1, Number(req.query.workdays || 6)));
+    const rate = Math.max(1, Number(req.query.rate || 8));
+    const workdays = clamp(parseIntOr(req.query.workdays, 6), 1, 7);
     const deadlineStr = String(req.query.deadline || '').slice(0, 10);
     if (!deadlineStr || isNaN(Date.parse(deadlineStr))) {
       return res.status(400).json({ error: 'deadline (YYYY-MM-DD) required' });
     }
 
+    const density = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
     const today = new Date(); today.setHours(0,0,0,0);
-    const deadline = new Date(deadlineStr + "T00:00:00");
-    if (deadline < today) return res.status(400).json({ error: 'deadline must be today or later' });
+    const deadline = new Date(deadlineStr + 'T00:00:00');
 
-    // count available workdays between today and deadline, respecting workdays/week
-    // naive approach: assume Sat/Sun off if workdays<=5, else all days except 7-workdays off from weekend-first
-    let availableDates = [];
-    const cur = new Date(today);
-    while (cur <= deadline) {
-      const dow = cur.getDay(); // 0 Sun..6 Sat
-      let isWorkday = true;
-      if (workdays <= 5) {
-        // Mon-Fri only
-        isWorkday = dow >= 1 && dow <= 5;
-      } else if (workdays === 6) {
-        // Mon-Sat
-        isWorkday = dow >= 1 && dow <= 6;
-      } else {
-        // 7 -> all days
-        isWorkday = true;
-      }
-      if (isWorkday) {
-        availableDates.push(cur.toISOString().slice(0,10));
-      }
-      cur.setDate(cur.getDate() + 1);
+    const completion = await kpiCompletion(prisma, id, density);
+    const daily = await dailySeries(prisma, id);
+    const t7 = trailingAvg(daily, 7);
+    const wd = enumerateWorkdaysCount(today, deadline, workdays) || 1;
+
+    const required_rate = target / wd;
+    const gap_per_day = required_rate - t7;
+    const extra_interviewers = gap_per_day > 0 ? Math.ceil(gap_per_day / rate) : 0;
+
+    const regions = await regionCounts(prisma, id);
+    const totalByRegion = regions.reduce((s,r)=>s+r.cnt,0) || 1;
+    const shares = regions.map(r => ({ region: r.region, share: r.cnt / totalByRegion }))
+                          .sort((a,b)=>b.share - a.share);
+    const ivDist = await interviewerDist(prisma, id);
+    const q25 = quantile(ivDist, 0.25), q75 = quantile(ivDist, 0.75);
+
+    const dowHour = await dowHourGrid(prisma, id);
+    function bucket(h){ return (h>=6&&h<=11)?'MORNING':(h>=12&&h<=16)?'AFTERNOON':(h>=17&&h<=21)?'EVENING':'OFF'; }
+    // top cells by average per distinct date
+    const cellAgg = new Map(); // key: dow|bucket -> {sum, days}
+    const byDayKey = new Set();
+    for (const r of dowHour) {
+      const k = `${r.dow}|${bucket(r.hour)}`;
+      const obj = cellAgg.get(k) || { sum:0, n:0 };
+      obj.sum += r.cnt; obj.n += 1;
+      cellAgg.set(k, obj);
     }
-    const available_workdays = availableDates.length || 1;
+    const cells = Array.from(cellAgg.entries()).map(([k,v])=>{
+      const [d,b] = k.split('|'); return { dow:Number(d), bucket:b, avg: v.sum/Math.max(1,v.n) };
+    }).sort((a,b)=>b.avg - a.avg);
+    const bestCells = cells.slice(0,3);
 
-    // capacity math
-    const required_interviewers = Math.max(1, Math.ceil(target / (rate * available_workdays)));
-    const max_capacity = required_interviewers * rate * available_workdays;
+    // Decision-tree “next best action”
+    let nba = null;
+    try {
+      const resp = await prisma.$queryRaw`SELECT 1`; // cheap ping
+      // We won’t call HTTP to our own route; we re-derive quick NBA from best cells:
+      nba = bestCells.length ? {
+        conditions: bestCells.map(c => ({ dow: c.dow, hour_bucket: c.bucket })),
+        expected_avg_completes_per_bucket: Number(bestCells[0].avg.toFixed(2))
+      } : null;
+    } catch {}
 
-    // flat daily plan until target reached
-    const perDay = Math.max(1, Math.floor(target / available_workdays));
-    let remaining = target;
-    const daily_plan = availableDates.map(d => {
-      const todayCompletes = Math.min(perDay, remaining);
-      remaining -= todayCompletes;
-      return { date: d, interviewers: required_interviewers, expected_completes: todayCompletes };
+    // Build recommendations (short, action-forward)
+    const recs = [];
+
+    // Velocity vs target
+    recs.push({
+      title: 'Velocity vs Target',
+      priority: gap_per_day > 0 ? 'high' : 'medium',
+      text: gap_per_day > 0
+        ? `Pace is ${t7.toFixed(1)} completes/day; need ${required_rate.toFixed(1)} to hit ${target} by ${deadlineStr}. Add ~${extra_interviewers} interviewer(s) at ${rate}/day or shift effort to high-yield slots.`
+        : `Pace (${t7.toFixed(1)}/day) meets required ${required_rate.toFixed(1)} to reach ${target} by ${deadlineStr}. Maintain staffing on strong days.`,
+      kpis: { trailing7_avg: Number(t7.toFixed(2)), required_rate: Number(required_rate.toFixed(2)), extra_interviewers }
     });
-    if (remaining > 0 && daily_plan.length) {
-      // push remainder to the last day
-      daily_plan[daily_plan.length - 1].expected_completes += remaining;
-      remaining = 0;
+
+    // Schedule optimization
+    if (bestCells.length) {
+      const D = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      const tip = bestCells.map(c => `${D[c.dow]}-${c.bucket}`).join(', ');
+      recs.push({
+        title: 'Optimize Schedule',
+        priority: 'medium',
+        text: `Concentrate deployment on: ${tip}. Expect higher completes during these windows based on historical yield.`,
+        kpis: bestCells.map(c => ({
+          dow: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][c.dow],
+          bucket: c.bucket,
+          avg_per_slot: Number(c.avg.toFixed(2))
+        }))
+      });
+    }
+
+    // Region rebalancing
+    if (shares.length >= 2) {
+      const top = shares[0], bottom = shares[shares.length - 1];
+      recs.push({
+        title: 'Rebalance Regions',
+        priority: 'medium',
+        text: `Reduce bias by shifting some effort from ${top.region} (${(top.share*100).toFixed(1)}%) toward ${bottom.region} (${(bottom.share*100).toFixed(1)}%).`,
+        kpis: shares.map(s => ({ region: s.region, share_pct: Number((s.share*100).toFixed(1)) }))
+      });
+    }
+
+    // Interviewer coaching
+    if (ivDist.length >= 4) {
+      const spread = q75 - q25;
+      recs.push({
+        title: 'Interviewer Coaching',
+        priority: spread >= 3 ? 'medium' : 'low',
+        text: spread >= 3
+          ? 'Output variance across interviewers is large (Q3–Q1 spread). Pair low performers with high performers and rotate assignments.'
+          : 'Output variance across interviewers is modest. Maintain current assignment plan.',
+        kpis: { q25, q75, spread }
+      });
+    }
+
+    // If CSAT exists, stitch it into guidance via rule engine results
+    const csat = await detectCSAT(prisma, id);
+    if (csat) {
+      recs.push({
+        title: 'Satisfaction Watch',
+        priority: csat.avg < 3 ? 'high' : 'low',
+        text: csat.avg < 3
+          ? `Detected CSAT-like metric "${csat.question}" with average ${csat.avg.toFixed(2)} (<3). Review questionnaire phrasing and interviewer prompts; target coaching where CSAT is lagging.`
+          : `Detected CSAT-like metric "${csat.question}" with average ${csat.avg.toFixed(2)}. Keep current script and cadence.`,
+        kpis: { csat_question: csat.question, avg: Number(csat.avg.toFixed(2)) }
+      });
     }
 
     res.json({
       dataset_id: id,
-      target,
-      rate,
-      workdays,
-      deadline: deadlineStr,
-      available_workdays,
-      required_interviewers,
-      max_capacity,
-      daily_plan
+      inputs: { target, deadline: deadlineStr, rate, workdays },
+      metrics: {
+        respondent_count: completion.respondent_count,
+        completed_respondents: completion.completed_respondents,
+        completed_pct: Number(completion.completed_pct.toFixed(1)),
+        completion_method: completion.completion_method,
+        trailing7_avg: Number(t7.toFixed(2)),
+        required_rate: Number(required_rate.toFixed(2)),
+        gap_per_day: Number(gap_per_day.toFixed(2)),
+        available_workdays: wd,
+        extra_interviewers
+      },
+      next_best_action: nba,
+      recommendations: recs
     });
   } catch (e) {
-    console.error('prescriptive_staffing_failed:', e);
-    res.status(500).json({ message: 'prescriptive_staffing_failed', detail: e.message });
+    console.error('prescriptive_text_insights_failed:', e);
+    res.status(500).json({ message: 'prescriptive_text_insights_failed', detail: e.message });
   }
 });
 
-// GET /api/dataset/:id/prescriptive/region-allocation?target=200
-// Allocate the target to regions by historical completion share (fallback equal split).
-router.get('/:id/prescriptive/region-allocation', async (req, res) => {
+// ==================== PRESCRIPTIVE: MONITOR (validation & drift) ====================
+// GET /api/dataset/:id/prescriptive/monitor?lookback=21
+router.get('/:id/prescriptive/monitor', async (req, res) => {
+  try {
+    const id = parseIntOr(req.params.id, -1);
+    const lookback = clamp(parseIntOr(req.query.lookback, 21), 7, 60);
+    const series = await dailySeries(prisma, id);
+    const last = series.slice(-lookback);
+
+    const alerts = [];
+    if (!last.length) {
+      alerts.push({ code: 'NO_ACTIVITY', severity: 'high', message: 'No interview activity detected.' });
+      return res.json({ dataset_id: id, alerts, windows: null });
+    }
+
+    // Windowed 3-day moving averages: compare last 3 vs prior 3
+    const k = 3;
+    const last3 = last.slice(-k).reduce((s,r)=>s+r.count,0)/Math.max(1, Math.min(k,last.length));
+    const prior3 = last.length > k ? last.slice(-(2*k), -k).reduce((s,r)=>s+r.count,0)/k : null;
+    if (prior3 !== null && prior3 > 0) {
+      const drop = (last3 - prior3) / prior3;
+      if (drop <= -0.3) {
+        alerts.push({
+          code: 'RATE_DROP',
+          severity: 'high',
+          message: `3-day average dropped ${(Math.abs(drop)*100).toFixed(0)}% vs prior 3 days. Investigate staffing, instrument issues, or holidays.`
+        });
+      }
+    }
+
+    // Days since last activity
+    const lastDate = new Date(last[last.length-1].date);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const deltaDays = Math.round((today - lastDate) / (24*3600*1000));
+    if (deltaDays >= 3) {
+      alerts.push({ code: 'STALE_ACTIVITY', severity: 'medium', message: `No interviews in ${deltaDays} day(s).` });
+    }
+
+    // Question coverage regression: compare bottom-coverage question share over the window
+    const lowQs = await lowCoverageQuestions(prisma, id, 5);
+    alerts.push({
+      code: 'LOW_COVERAGE_QUESTIONS',
+      severity: lowQs.length ? 'medium' : 'low',
+      message: lowQs.length ? 'Some questions show persistently low coverage.' : 'No low-coverage questions detected recently.',
+      details: lowQs
+    });
+
+    res.json({
+      dataset_id: id,
+      windows: { lookback_days: lookback, last3, prior3 },
+      alerts
+    });
+  } catch (e) {
+    console.error('prescriptive_monitor_failed:', e);
+    res.status(500).json({ message: 'prescriptive_monitor_failed', detail: e.message });
+  }
+});
+
+
+// ---------------------------- STAFFING ROUTE ----------------------------
+router.get('/:id/prescriptive/staffing', async (req, res) => {
   try {
     const id = parseId(req.params.id);
-    const target = Math.max(1, Number(req.query.target || 0));
+    const target = Math.max(1, Number(req.query.target || 0));  // Get target from query params
+    const rate = Math.max(1, Number(req.query.rate || 8));      // Get rate per interviewer per day
+    const workdays = clamp(parseIntOr(req.query.workdays, 6), 1, 7); // Get workdays per week
+    const deadlineStr = String(req.query.deadline || '').slice(0, 10); // Get deadline in 'YYYY-MM-DD' format
 
-    const rows = await prisma.$queryRaw`
-      SELECT COALESCE(region,'Unspecified') AS region,
-             COUNT(DISTINCT "respondentId")::int AS cnt
-      FROM "ResponseFact"
-      WHERE "datasetId" = ${id} AND "interviewDate" IS NOT NULL
-      GROUP BY region
-      ORDER BY cnt DESC
-      LIMIT 20
-    `;
-    let items = [];
-    if (!rows || rows.length === 0) {
-      // equal split fallback across one bucket
-      items = [{ region: 'Overall', cnt: 1 }];
-    } else {
-      items = rows.map(r => ({ region: r.region, cnt: Number(r.cnt || 0) }));
+    // Validate the deadline date
+    if (!deadlineStr || isNaN(Date.parse(deadlineStr))) {
+      return res.status(400).json({ error: 'Invalid deadline' });
     }
-    const total = items.reduce((s, r) => s + (r.cnt || 0), 0) || items.length;
-    const withShare = items.map(r => ({ ...r, share: (r.cnt || 0) / total }));
 
-    // round allocation while preserving total
-    let assigned = withShare.map(r => ({ region: r.region, share: r.share, assigned: Math.floor(r.share * target) }));
-    let remainder = target - assigned.reduce((s, r) => s + r.assigned, 0);
-    // give remainders to top shares
-    assigned.sort((a,b)=>b.share - a.share);
-    for (let i=0; i<assigned.length && remainder>0; i++, remainder--) {
-      assigned[i].assigned += 1;
-    }
-    // restore original order by share desc
-    assigned.sort((a,b)=>b.share - a.share);
+    // Make calculations based on the received parameters
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const deadline = new Date(deadlineStr + "T00:00:00");
 
-    res.json({ dataset_id: id, target, items: assigned });
+    // Calculate workdays between today and deadline
+    const workdaysCount = enumerateWorkdaysCount(today, deadline, workdays);
+
+    // Calculate the number of interviewers required based on the target and available workdays
+    const requiredInterviewers = Math.max(1, Math.ceil(target / (rate * workdaysCount)));
+    const maxCapacity = requiredInterviewers * rate * workdaysCount;
+
+    // Generate the daily plan for interviewers (distribute target across workdays)
+    const dailyPlan = generateDailyPlan(target, workdaysCount, requiredInterviewers);
+
+    res.json({
+      required_interviewers: requiredInterviewers,
+      available_workdays: workdaysCount,
+      max_capacity: maxCapacity,
+      daily_plan: dailyPlan
+    });
   } catch (e) {
-    console.error('prescriptive_region_failed:', e);
-    res.status(500).json({ message: 'prescriptive_region_failed', detail: e.message });
+    console.error('Staffing Route Failed:', e);
+    res.status(500).json({ error: 'staffing_failed', detail: e.message });
   }
-});
-
+})
 
 
 // ---------------------------- preview/debug ----------------------------
