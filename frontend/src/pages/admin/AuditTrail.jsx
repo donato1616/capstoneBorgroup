@@ -79,6 +79,18 @@ function DatasetSelector({ datasets = [], value, onSelectDataset }) {
   );
 }
 
+// --- local archive helper (same key as Overview) ---
+const ARCHIVE_KEY = "archivedDatasets_v1";
+function loadArchivedKeys() {
+  try {
+    const raw = localStorage.getItem(ARCHIVE_KEY);
+    if (!raw) return [];
+    return (JSON.parse(raw) || []).map(x => x.dataset_id);
+  } catch {
+    return [];
+  }
+}
+
 export default function AuditTrail() {
   const [datasetId, setDatasetId] = useState("");
   const [items, setItems] = useState([]);
@@ -119,6 +131,13 @@ export default function AuditTrail() {
         } else {
           ds = ds.map(d => ({ dataset_id: d.dataset_id ?? d.id, name: d.name ?? d.dataset_id }));
         }
+
+        // filter out archived datasets (local archive list)
+        const archivedKeys = loadArchivedKeys();
+        if (archivedKeys.length) {
+          ds = ds.filter(d => !archivedKeys.includes(d.dataset_id));
+        }
+
         setDatasets(ds);
 
         // auto-select first dataset if nothing selected
@@ -132,8 +151,10 @@ export default function AuditTrail() {
             dataset_id: d.dataset_id || d.id,
             name: d.name ?? d.dataset_id
           }));
-          setDatasets(ds);
-          if (!datasetId && ds.length) setDatasetId(ds[0].dataset_id);
+          const archivedKeys = loadArchivedKeys();
+          const filtered = archivedKeys.length ? ds.filter(d => !archivedKeys.includes(d.dataset_id)) : ds;
+          setDatasets(filtered);
+          if (!datasetId && filtered.length) setDatasetId(filtered[0].dataset_id);
         } catch (err) {
           console.error(err);
           setDatasets([]);
