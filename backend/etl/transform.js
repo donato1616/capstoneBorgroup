@@ -2,11 +2,11 @@
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat.js";
 import crypto from "crypto";
-import { CANON, normalizeHeader, isQuestionCol as isQuestionColHeuristic } from "./canonical.js";
+import { CANON, normalizeHeader, isQuestionCol as isQuestionColHeuristic, isMetadataCol } from "./canonical.js";
 
 dayjs.extend(customParseFormat);
 
-// meta/non-question fields to exclude from pivot (normalized header names)
+// Extended meta headers for your specific dataset
 const META_HEADERS = new Set([
   "respondent_serial", "respondentid", "respondent_id", "resp_id", "sbjnum", "uuid", "id",
   "datacollection_finishtime", "datacollection_starttime", "finishtime", "starttime",
@@ -19,6 +19,10 @@ const META_HEADERS = new Set([
   "latitude", "longitude", "gps_lat", "gps_lng", "gps_latitude", "gps_longitude",
   "duration", "duration_sec", "is_complete", "status",
   "remarks", "comment", "comments", "note", "notes",
+  // Additional headers from your dataset
+  "netduration", "filter", "sbjnam", "usrunq", "subjdata", "rvwtime", "rvwcomment", 
+  "srvyrcomment", "complete", "stopq", "test", "parentid", "utcdiff", "qascore",
+  "frscname", "exrenum", "vstart", "vend", "rvwname", "cancel", "root_score"
 ]);
 
 // ---------- helpers ----------
@@ -173,15 +177,59 @@ function parseNum(v) {
 }
 
 function isQuestionCol(headerNorm) {
-  if (META_HEADERS.has(headerNorm)) return false;
+  if (META_HEADERS.has(headerNorm) || isMetadataCol(headerNorm)) return false;
   if (isQuestionColHeuristic(headerNorm)) return true;
-  if (/(score|rating|rank|value|count|amount|index|total|pct|percent)/i.test(headerNorm)) return true;
-  return true;
+  
+  // Specific patterns for your dataset
+  if (/^q[a-z0-9_]/i.test(headerNorm)) return true; // Q followed by alphanumeric or underscore (e.g., Q1, Q_1, Q11, QOB1, QQConsent)
+  if (/^i[a-z0-9_]/i.test(headerNorm)) return true; // I followed by alphanumeric or underscore
+  if (/^t_?sec/i.test(headerNorm)) return true; // T_SEC, T_SEC01, etc.
+  if (/^hhh_?\d+/i.test(headerNorm)) return true; // HHH_1, HHH1, etc.
+  if (/^a_q\d+/i.test(headerNorm)) return true; // A_Q60_1, etc.
+  
+  return false; // Be conservative - only include known question patterns
 }
 
 function syntheticId(row, i) {
   const h = crypto.createHash("sha1").update(JSON.stringify(row)).digest("hex").slice(0, 10);
   return `resp_${i + 1}_${h}`;
+}
+
+// Check if a row contains actual response data (not metadata)
+function isResponseRow(row, headers) {
+  // If we have SbjNum with a valid value, it's likely a response
+  const sbjNum = row['SbjNum'] || row['sbjnum'] || row['SBJNUM'];
+  if (sbjNum && String(sbjNum).trim() && !isNaN(parseInt(sbjNum))) {
+    return true;
+  }
+  
+  // Check for other respondent ID patterns with valid values
+  const respondentId = row['RespondentID'] || row['respondentid'] || row['RESPONDENTID'];
+  if (respondentId && String(respondentId).trim() && respondentId !== '0') {
+    return true;
+  }
+  
+  // Check if row contains metadata keywords in any column
+  const rowText = Object.values(row).join(' ').toLowerCase();
+  const metadataKeywords = ['total', 'quota', 'summary', 'sub-total', 'cumulative', 'allocation'];
+  
+  if (metadataKeywords.some(keyword => rowText.includes(keyword))) {
+    return false;
+  }
+  
+  // Check if this looks like a header row (contains column names)
+  const headerLikePatterns = ['sbjnum', 'respondent', 'question', 'answer', 'date', 'region'];
+  if (headerLikePatterns.some(pattern => rowText.includes(pattern))) {
+    return false;
+  }
+  
+  // For Project Mickey dataset, check if we have any non-empty values in key columns
+  const hasKeyData = Object.keys(row).some(key => {
+    const value = row[key];
+    return value !== null && value !== undefined && value !== '' && String(value).trim() !== '';
+  });
+  
+  return hasKeyData;
 }
 
 // ---------- main ----------
@@ -190,10 +238,26 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
   const issues = [];
   const canon = { ...CANON, ...(mapping.canonical || {}) };
 
-  if (!rows || !rows.length) return { facts: outFacts, issues };
+  if (!rows || !rows.length) {
+    console.log('No rows to transform');
+    return { facts: outFacts, issues };
+  }
+
+  console.log(`Starting transformation of ${rows.length} rows...`);
 
   const headers = Object.keys(rows[0] || {});
-  const headerNorms = headers.map((h) => ({ norm: normalizeHeader(h), orig: h }));
+  const headerNorms = headers.map((h) => ({ 
+    norm: normalizeHeader(h), 
+    orig: h,
+    isQuestion: isQuestionCol(normalizeHeader(h))
+  }));
+
+  // Log column analysis
+  const questionCols = headerNorms.filter(h => h.isQuestion);
+  const metaCols = headerNorms.filter(h => !h.isQuestion);
+  
+  console.log(`Found ${questionCols.length} question columns and ${metaCols.length} meta columns`);
+  console.log('Question columns:', questionCols.map(h => h.orig).slice(0, 10));
 
   const nonBlankColumns = new Set();
   for (const { norm, orig } of headerNorms) {
@@ -201,20 +265,34 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
     if (any) nonBlankColumns.add(norm);
   }
 
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
+  let responseRowCount = 0;
+  let processed = 0;
+  const reportInterval = Math.max(1, Math.floor(rows.length / 10));
 
-    const respondentIdRaw =
-      pick(r, canon.respondentId, normMap) || r["Rno"] || r["RNO"] || r["rno"];
+  for (let i = 0; i < rows.length; i++) {
+    if (i % reportInterval === 0) {
+      console.log(`Processing row ${i}/${rows.length} (${Math.round(i/rows.length*100)}%)`);
+    }
+
+    const r = rows[i];
+    
+    // Skip non-response rows
+    if (!isResponseRow(r, headers)) {
+      continue;
+    }
+    responseRowCount++;
+
+    const respondentIdRaw = pick(r, canon.respondentId, normMap) || r["SbjNum"] || r["sbjnum"] || r["SBJNUM"];
     let interviewDate = parseDateStrict(pick(r, canon.interviewDate, normMap));
-    const region = pick(r, canon.region, normMap) || r["Area"] || r["area"];
+    const region = pick(r, canon.region, normMap);
     const city = pick(r, canon.city, normMap);
-    const interviewer = pick(r, canon.interviewer, normMap) || r["Recruiter"] || r["recruiter"];
+    const interviewer = pick(r, canon.interviewer, normMap);
     const channel = pick(r, canon.channel, normMap);
 
+    // Enhanced date detection for your specific dataset
     if (!interviewDate) {
       for (const { norm, orig } of headerNorms) {
-        if (!/(date|time|visit|fsr|schedule)/i.test(norm)) continue;
+        if (!/(date|time|interview|start|end)/i.test(norm)) continue;
         const d = parseDateStrict(r[orig]) || parseDateFromFreeText(r[orig]);
         if (d) {
           interviewDate = d;
@@ -223,15 +301,10 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
       }
     }
 
-    if (!interviewDate) {
-      const fromRemarks = parseDateFromFreeText(
-        pick(r, ["remarks", "comment", "comments", "note", "notes", "status"], normMap)
-      );
-      interviewDate = fromRemarks || findAnyDateInRow(r);
-    }
-
     const respondentId = respondentIdRaw ? String(respondentIdRaw).trim() : syntheticId(r, i);
-    if (!respondentIdRaw) issues.push({ row: i, type: "synthetic_respondent_id" });
+    if (!respondentIdRaw) {
+      issues.push({ row: i, type: "synthetic_respondent_id" });
+    }
 
     const cleanRow = {
       respondentId,
@@ -252,24 +325,46 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
       const textVal = rawVal === "" || rawVal === undefined || rawVal === null ? null : String(rawVal);
       const numVal = parseNum(rawVal);
 
-      if (textVal === null && numVal === null) continue;
+      // For Project Mickey dataset, include ALL question columns even if empty
+      // This ensures we capture the structure of the survey
+      if (textVal === null && numVal === null) {
+        // Still create a fact for empty questions to preserve the question structure
+        outFacts.push({
+          respondentId: cleanRow.respondentId,
+          interviewDate: cleanRow.interviewDate,
+          region: cleanRow.region,
+          city: cleanRow.city,
+          interviewer: cleanRow.interviewer,
+          channel: cleanRow.channel,
+          questionCode: orig,
+          answerText: null,
+          answerNum: null,
+          rawJson: r,
+          cleanJson: cleanRow,
+        });
+        pushed++;
+        continue;
+      }
 
-      outFacts.push({
-        respondentId: cleanRow.respondentId,
-        interviewDate: cleanRow.interviewDate,
-        region: cleanRow.region,
-        city: cleanRow.city,
-        interviewer: cleanRow.interviewer,
-        channel: cleanRow.channel,
-        questionCode: orig,
-        answerText: textVal,
-        answerNum: numVal,
-        rawJson: r,
-        cleanJson: cleanRow,
-      });
-      pushed++;
+      if (textVal !== null || numVal !== null) {
+        outFacts.push({
+          respondentId: cleanRow.respondentId,
+          interviewDate: cleanRow.interviewDate,
+          region: cleanRow.region,
+          city: cleanRow.city,
+          interviewer: cleanRow.interviewer,
+          channel: cleanRow.channel,
+          questionCode: orig,
+          answerText: textVal,
+          answerNum: numVal,
+          rawJson: r,
+          cleanJson: cleanRow,
+        });
+        pushed++;
+      }
     }
 
+    // If no questions were pushed (all were empty), still create a presence fact
     if (pushed === 0) {
       outFacts.push({
         respondentId: cleanRow.respondentId,
@@ -285,8 +380,13 @@ function consolidateRows(rows, mapping = {}, normMap = {}) {
         cleanJson: cleanRow,
       });
     }
+
+    processed++;
   }
 
+  console.log(`Transformation complete: ${outFacts.length} facts generated from ${responseRowCount} response rows`);
+  console.log(`Filtered out ${rows.length - responseRowCount} non-response rows`);
+  
   return { facts: outFacts, issues };
 }
 

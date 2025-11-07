@@ -1,0 +1,11 @@
+{
+    "filePatterns": ["mickey", "project_mickey"],
+    "sheetNamePattern": "^(data|responses|raw)",
+    "headerRowOffset": 0,
+    "canonical": {
+      "respondentId": ["SbjNum", "sbjnum", "SBJNUM"],
+      "interviewDate": ["Date", "date", "interviewdate"],
+      "region": ["Area", "area", "Region", "region"],
+      "interviewer": ["Srvyr", "srvyr", "Interviewer", "interviewer"]
+    }
+  }

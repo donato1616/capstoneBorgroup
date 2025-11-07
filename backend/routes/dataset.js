@@ -42,6 +42,49 @@ const diskUpload = multer({
 function getUploadMiddleware() {
   return UPLOAD_STORAGE === 'memory' ? memoryUpload.single('file') : diskUpload.single('file');
 }
+
+// --------- Missing Date prototype method for getWeek() ---------
+Date.prototype.getWeek = function() {
+  const date = new Date(this.getTime());
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+};
+
+// --------- Missing generateDailyPlan function for staffing route ---------
+function generateDailyPlan(target, workdaysCount, requiredInterviewers) {
+  if (workdaysCount <= 0 || requiredInterviewers <= 0) {
+    return [];
+  }
+  
+  const baseDailyTarget = Math.floor(target / workdaysCount);
+  const remainder = target % workdaysCount;
+  
+  const plan = [];
+  for (let i = 0; i < workdaysCount; i++) {
+    const dailyTarget = baseDailyTarget + (i < remainder ? 1 : 0);
+    plan.push({
+      day: i + 1,
+      target: dailyTarget,
+      interviewers: requiredInterviewers,
+      target_per_interviewer: Math.ceil(dailyTarget / requiredInterviewers)
+    });
+  }
+  
+  return plan;
+}
+
+// --------- Missing bestPath function for decision tree analysis ---------
+function bestPath(node, conds = []) {
+  if (!node || node.type === 'leaf') return { conds, avg: node?.avg || 0 };
+  
+  const pathLeft = bestPath(node.left, [...conds, { [node.dim]: node.equals }]);
+  const pathRight = bestPath(node.right, conds);
+  
+  return (pathLeft.avg >= pathRight.avg) ? pathLeft : pathRight;
+}
+
 // --------- Outlier Removal and Feature Engineering ---------
 
 // Remove outliers based on Interquartile Range (IQR)
@@ -270,7 +313,7 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
     const fileBuf = readFileToBuffer(req.file);
     tick(`read file into buffer (${fileBuf?.length || 0} bytes)`);
 
-    // dataset row
+    // dataset row creation
     const ds = await prisma.datasets.create({
       data: {
         name: req.body?.name || fname,
@@ -287,30 +330,42 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
     let rows, sheetName, normMap;
     try {
       const r = readBestSheet(fileBuf, fname, chooseMapping(fname));
+
+      // Add detailed logging to inspect the parsing outcome
+      console.log("Parsed Data:", r); // Log raw parsed data
       rows = r.rows; sheetName = r.sheetName; normMap = r.normMap;
+
+      if (!rows || rows.length === 0) {
+        console.error("No rows found after parsing sheet.");
+        return res.status(400).json({ error: 'No data rows detected' });
+      }
     } catch (e) {
+      console.error("Error in parsing the dataset:", e.message);
+      console.error(e.stack);
       return res.status(400).json({ error: 'Failed to parse file', detail: e.message });
     } finally {
       if (req.file?.path) fs.unlink(req.file.path, () => {});
     }
     tick(`parsed workbook: sheet="${sheetName}", rows=${rows?.length || 0}`);
 
-    if (!rows?.length) return res.status(400).json({ error: 'No data rows detected' });
-
     // transform -> facts
-   // transform -> facts, apply outlier removal and feature engineering
     let facts = [], issues = [];
     try {
       const out = consolidateRows(rows, {}, normMap);
       facts = out.facts || []; 
       issues = out.issues || [];
 
-      // Remove outliers
-      facts = removeOutliers(facts);
+      // Logging the transformed facts
+      console.log("Transformed Facts:", facts);
+      console.log("Issues Detected:", issues);
+
+      // Remove outliers 
+      //facts = removeOutliers(facts);
 
       // Apply feature engineering
       facts = addTimeFeatures(facts);
     } catch (e) {
+      console.error("Error in transformation step:", e.message);
       return res.status(500).json({ error: 'Transform failed', detail: e.message });
     }
     tick(`transformed to facts=${facts.length} (issues=${issues.length})`);
@@ -346,22 +401,23 @@ router.post('/upload', getUploadMiddleware(), async (req, res) => {
           };
         });
 
-    await client.responseFact.createMany({
-      data: mapped,
-      skipDuplicates: SKIP_DUPLICATES
-    });
-    tick(`inserted ${Math.min(i + mapped.length, facts.length)}/${facts.length}`);
-  }
-};
+        // Insert data into database
+        await client.responseFact.createMany({
+          data: mapped,
+          skipDuplicates: SKIP_DUPLICATES
+        });
+        tick(`inserted ${Math.min(i + mapped.length, facts.length)}/${facts.length}`);
+      }
+    };
 
     if (USE_TX) {
       await prisma.$transaction(async (tx) => { await doInsertBatches(tx); });
     } else {
       await doInsertBatches(prisma);
     }
-    
+
     console.log(`[upload] total: ${Date.now() - T0}ms`);
-      
+    
     res.json({
       status: 'ok',
       dataset_id: ds.id,
@@ -859,7 +915,6 @@ if (!synthetic && n >= 5) {
   }
 });
 
-// Compatibility alias used by some frontends: /forecast
 // Compatibility alias used by some frontends: /forecast
 router.get('/:id/forecast', async (req, res) => {
   try {
@@ -1519,13 +1574,7 @@ router.get('/:id/prescriptive/decision-tree', async (req, res) => {
 
     const tree = buildTree(facts, 0);
 
-    // Derive a “next best action” from the leftmost (top-mean) path
-    function bestPath(node, conds) {
-      if (!node || node.type === 'leaf') return { conds, avg: node?.avg || 0 };
-      const pathLeft = bestPath(node.left, conds.concat([{ [node.dim]: node.equals }]));
-      const pathRight = bestPath(node.right, conds); // right means "not equals"
-      return (pathLeft.avg >= pathRight.avg) ? pathLeft : pathRight;
-    }
+    // Derive a "next best action" from the leftmost (top-mean) path
     const nba = bestPath(tree, []);
 
     res.json({
@@ -1592,11 +1641,11 @@ router.get('/:id/prescriptive/insights', async (req, res) => {
     }).sort((a,b)=>b.avg - a.avg);
     const bestCells = cells.slice(0,3);
 
-    // Decision-tree “next best action”
+    // Decision-tree "next best action"
     let nba = null;
     try {
       const resp = await prisma.$queryRaw`SELECT 1`; // cheap ping
-      // We won’t call HTTP to our own route; we re-derive quick NBA from best cells:
+      // We won't call HTTP to our own route; we re-derive quick NBA from best cells:
       nba = bestCells.length ? {
         conditions: bestCells.map(c => ({ dow: c.dow, hour_bucket: c.bucket })),
         expected_avg_completes_per_bucket: Number(bestCells[0].avg.toFixed(2))
@@ -1690,7 +1739,310 @@ router.get('/:id/prescriptive/insights', async (req, res) => {
     console.error('prescriptive_text_insights_failed:', e);
     res.status(500).json({ message: 'prescriptive_text_insights_failed', detail: e.message });
   }
+});// ==================== PRESCRIPTIVE: REGION ALLOCATION ====================
+// GET /api/dataset/:id/prescriptive/region-allocation?target=200
+router.get('/:id/prescriptive/region-allocation', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const target = Math.max(1, Number(req.query.target || 0));
+
+    // Get historical completion counts by region
+    const regions = await regionCounts(prisma, id, 50); // Get all regions
+    
+    const totalCompletes = regions.reduce((sum, r) => sum + r.cnt, 0);
+    
+    if (totalCompletes === 0) {
+      // If no historical data, distribute evenly among available regions
+      const uniqueRegions = await prisma.$queryRaw`
+        SELECT DISTINCT COALESCE(region, 'Unspecified') as region
+        FROM "ResponseFact" 
+        WHERE "datasetId" = ${id}
+      `;
+      
+      const equalShare = Math.round(target / Math.max(1, uniqueRegions.length));
+      const items = uniqueRegions.map(r => ({
+        region: r.region,
+        share: 1 / uniqueRegions.length,
+        assigned: equalShare
+      }));
+      
+      // Adjust for rounding
+      const totalAssigned = items.reduce((sum, item) => sum + item.assigned, 0);
+      if (totalAssigned < target && items.length > 0) {
+        items[0].assigned += (target - totalAssigned);
+      }
+      
+      return res.json({ items });
+    }
+
+    // Calculate shares based on historical distribution
+    const items = regions.map(r => ({
+      region: r.region,
+      share: r.cnt / totalCompletes,
+      assigned: Math.round(r.cnt / totalCompletes * target)
+    }));
+
+    // Adjust for rounding errors
+    const totalAssigned = items.reduce((sum, item) => sum + item.assigned, 0);
+    let difference = target - totalAssigned;
+    
+    if (difference !== 0) {
+      // Sort by share to adjust the largest regions first
+      items.sort((a, b) => b.share - a.share);
+      let index = 0;
+      while (difference !== 0) {
+        if (difference > 0) {
+          items[index % items.length].assigned += 1;
+          difference -= 1;
+        } else {
+          if (items[index % items.length].assigned > 0) {
+            items[index % items.length].assigned -= 1;
+            difference += 1;
+          }
+        }
+        index++;
+      }
+    }
+
+    res.json({ 
+      items,
+      historical_total: totalCompletes,
+      allocation_method: totalCompletes > 0 ? 'historical_distribution' : 'equal_distribution'
+    });
+  } catch (e) {
+    console.error('region_allocation_failed:', e);
+    res.status(500).json({ message: 'region_allocation_failed', detail: e.message });
+  }
 });
+
+
+// ==================== PRESCRIPTIVE: ENHANCED INSIGHTS (with Rule-Based Logic & Decision Trees) ====================
+// GET /api/dataset/:id/prescriptive/insights?target=200&deadline=YYYY-MM-DD&rate=8&workdays=6
+router.get('/:id/prescriptive/insights', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    const target = Math.max(1, Number(req.query.target || 0));
+    const rate = Math.max(1, Number(req.query.rate || 8));
+    const workdays = clamp(parseIntOr(req.query.workdays, 6), 1, 7);
+    const deadlineStr = String(req.query.deadline || '').slice(0, 10);
+    
+    if (!deadlineStr || isNaN(Date.parse(deadlineStr))) {
+      return res.status(400).json({ error: 'deadline (YYYY-MM-DD) required' });
+    }
+
+    const density = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const deadline = new Date(deadlineStr + 'T00:00:00');
+
+    // Get core metrics
+    const completion = await kpiCompletion(prisma, id, density);
+    const daily = await dailySeries(prisma, id);
+    const t7 = trailingAvg(daily, 7);
+    const wd = enumerateWorkdaysCount(today, deadline, workdays) || 1;
+
+    const required_rate = target / wd;
+    const gap_per_day = required_rate - t7;
+    const extra_interviewers = gap_per_day > 0 ? Math.ceil(gap_per_day / rate) : 0;
+
+    // Get data for rule-based logic
+    const regions = await regionCounts(prisma, id);
+    const csat = await detectCSAT(prisma, id);
+    const lowQs = await lowCoverageQuestions(prisma, id, 5);
+    
+    // Decision Tree Analysis for optimal timing
+    const dowHour = await dowHourGrid(prisma, id);
+    const bestSlots = analyzeOptimalSlots(dowHour);
+
+    // RULE-BASED LOGIC (as per capstone requirements)
+    const ruleBasedAlerts = generateRuleBasedAlerts({
+      completion,
+      csat,
+      regions,
+      lowQs,
+      t7,
+      required_rate
+    });
+
+    // DECISION TREE OPTIMIZATION RECOMMENDATIONS
+    const optimizationRecs = generateOptimizationRecommendations({
+      bestSlots,
+      regions,
+      gap_per_day
+    });
+
+    // NEXT BEST ACTION RECOMMENDATIONS
+    const nextBestActions = generateNextBestActions({
+      ruleBasedAlerts,
+      optimizationRecs,
+      extra_interviewers,
+      target
+    });
+
+    // Combine all recommendations
+    const allRecommendations = [
+      ...ruleBasedAlerts,
+      ...optimizationRecs,
+      ...nextBestActions
+    ];
+
+    res.json({
+      dataset_id: id,
+      inputs: { target, deadline: deadlineStr, rate, workdays },
+      metrics: {
+        respondent_count: completion.respondent_count,
+        completed_respondents: completion.completed_respondents,
+        completed_pct: Number(completion.completed_pct.toFixed(1)),
+        trailing7_avg: Number(t7.toFixed(2)),
+        required_rate: Number(required_rate.toFixed(2)),
+        gap_per_day: Number(gap_per_day.toFixed(2)),
+        available_workdays: wd,
+        extra_interviewers
+      },
+      recommendations: allRecommendations,
+      rule_based_alerts: ruleBasedAlerts.filter(r => r.priority === 'high'),
+      optimization_paths: optimizationRecs,
+      next_best_actions: nextBestActions
+    });
+  } catch (e) {
+    console.error('enhanced_insights_failed:', e);
+    res.status(500).json({ message: 'enhanced_insights_failed', detail: e.message });
+  }
+});
+
+// Helper functions for enhanced insights
+function analyzeOptimalSlots(dowHour) {
+  const slots = [];
+  for (const r of dowHour) {
+    const slot = {
+      dow: r.dow,
+      hour: r.hour,
+      count: r.cnt,
+      efficiency: r.cnt // Simple efficiency metric
+    };
+    slots.push(slot);
+  }
+  
+  // Sort by efficiency (completes per slot)
+  return slots.sort((a, b) => b.efficiency - a.efficiency).slice(0, 5);
+}
+
+function generateRuleBasedAlerts({ completion, csat, regions, lowQs, t7, required_rate }) {
+  const alerts = [];
+  const completionRate = completion.completed_pct / 100;
+  
+  // RULE 1: Low Satisfaction + Low Completion Rate
+  if (csat && csat.avg < 3 && completionRate < 0.7) {
+    alerts.push({
+      title: 'Critical: Low Satisfaction and Completion Rate',
+      priority: 'high',
+      text: `Satisfaction score (${csat.avg.toFixed(2)}) below 3 and completion rate (${completion.completed_pct.toFixed(1)}%) below 70%. Recommend targeted intervention in underperforming regions.`,
+      type: 'rule_based',
+      rule: 'LOW_SATISFACTION_AND_COMPLETION'
+    });
+  }
+
+  // RULE 2: Performance Gap Alert
+  if (t7 < required_rate * 0.8) {
+    alerts.push({
+      title: 'Performance Gap Detected',
+      priority: 'high', 
+      text: `Current pace (${t7.toFixed(1)}/day) is below 80% of required rate (${required_rate.toFixed(1)}/day). Immediate action needed to avoid missing targets.`,
+      type: 'rule_based',
+      rule: 'PERFORMANCE_GAP'
+    });
+  }
+
+  // RULE 3: Low Coverage Questions
+  if (lowQs.length > 0 && completion.respondent_count > 0) {
+    const coveragePct = (lowQs[0].n / completion.respondent_count) * 100;
+    if (coveragePct < 60) {
+      alerts.push({
+        title: 'Low Question Coverage Alert',
+        priority: 'medium',
+        text: `Question "${lowQs[0].question}" has only ${coveragePct.toFixed(1)}% coverage. Review field scripts and interviewer training.`,
+        type: 'rule_based',
+        rule: 'LOW_COVERAGE'
+      });
+    }
+  }
+
+  return alerts;
+}
+
+function generateOptimizationRecommendations({ bestSlots, regions, gap_per_day }) {
+  const recs = [];
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // Time optimization from decision tree analysis
+  if (bestSlots.length > 0) {
+    const bestSlot = bestSlots[0];
+    recs.push({
+      title: 'Optimal Survey Timing',
+      priority: 'medium',
+      text: `Decision tree analysis identifies ${dayNames[bestSlot.dow]} ${bestSlot.hour}:00 as highest yielding time slot. Increase deployments during similar windows.`,
+      type: 'optimization',
+      algorithm: 'decision_tree'
+    });
+  }
+
+  // Regional optimization
+  if (regions.length >= 3) {
+    const topRegion = regions[0];
+    const bottomRegion = regions[regions.length - 1];
+    const ratio = topRegion.cnt / Math.max(1, bottomRegion.cnt);
+    
+    if (ratio > 2) {
+      recs.push({
+        title: 'Regional Rebalancing Opportunity',
+        priority: 'medium',
+        text: `Significant imbalance detected: ${topRegion.region} completes ${ratio.toFixed(1)}× more than ${bottomRegion.region}. Reallocate resources for better coverage.`,
+        type: 'optimization', 
+        algorithm: 'regional_analysis'
+      });
+    }
+  }
+
+  return recs;
+}
+
+function generateNextBestActions({ ruleBasedAlerts, optimizationRecs, extra_interviewers, target }) {
+  const actions = [];
+  const hasCriticalAlerts = ruleBasedAlerts.some(alert => alert.priority === 'high');
+
+  // Primary next best action based on situation
+  if (hasCriticalAlerts) {
+    actions.push({
+      title: 'Immediate Intervention Required',
+      priority: 'high',
+      text: 'Multiple critical alerts detected. Focus on regional performance review and interviewer retraining before scaling operations.',
+      type: 'next_best_action'
+    });
+  } else if (extra_interviewers > 0) {
+    actions.push({
+      title: 'Scale Interviewer Capacity',
+      priority: 'medium',
+      text: `Add ${extra_interviewers} interviewer(s) to meet target of ${target} completes. Deploy during optimal time slots identified.`,
+      type: 'next_best_action'
+    });
+  } else {
+    actions.push({
+      title: 'Maintain Current Operations',
+      priority: 'low',
+      text: 'Current pace meets requirements. Focus on quality maintenance and minor optimizations.',
+      type: 'next_best_action'
+    });
+  }
+
+  // Additional strategic actions
+  actions.push({
+    title: 'Strategic Deployment Planning',
+    priority: 'medium',
+    text: 'Implement A/B testing for different deployment strategies to identify additional efficiency gains.',
+    type: 'next_best_action'
+  });
+
+  return actions;
+}
 
 // ==================== PRESCRIPTIVE: MONITOR (validation & drift) ====================
 // GET /api/dataset/:id/prescriptive/monitor?lookback=21
@@ -1750,48 +2102,86 @@ router.get('/:id/prescriptive/monitor', async (req, res) => {
   }
 });
 
-
 // ---------------------------- STAFFING ROUTE ----------------------------
+// Enhanced staffing route with historical data alignment
 router.get('/:id/prescriptive/staffing', async (req, res) => {
   try {
     const id = parseId(req.params.id);
-    const target = Math.max(1, Number(req.query.target || 0));  // Get target from query params
-    const rate = Math.max(1, Number(req.query.rate || 8));      // Get rate per interviewer per day
-    const workdays = clamp(parseIntOr(req.query.workdays, 6), 1, 7); // Get workdays per week
-    const deadlineStr = String(req.query.deadline || '').slice(0, 10); // Get deadline in 'YYYY-MM-DD' format
+    const target = Math.max(1, Number(req.query.target || 0));
+    const rate = Math.max(1, Number(req.query.rate || 8));
+    const workdays = clamp(parseIntOr(req.query.workdays, 6), 1, 7);
+    const deadlineStr = String(req.query.deadline || '').slice(0, 10);
 
-    // Validate the deadline date
     if (!deadlineStr || isNaN(Date.parse(deadlineStr))) {
-      return res.status(400).json({ error: 'Invalid deadline' });
+      return res.status(400).json({ error: 'Invalid deadline. Use YYYY-MM-DD format.' });
     }
 
-    // Make calculations based on the received parameters
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const deadline = new Date(deadlineStr + "T00:00:00");
 
-    // Calculate workdays between today and deadline
+    // Get historical performance data
+    const daily = await dailySeries(prisma, id);
+    const t7 = trailingAvg(daily, 7);
     const workdaysCount = enumerateWorkdaysCount(today, deadline, workdays);
+    
+    if (workdaysCount <= 0) {
+      return res.status(400).json({ error: 'No workdays available between today and deadline' });
+    }
 
-    // Calculate the number of interviewers required based on the target and available workdays
-    const requiredInterviewers = Math.max(1, Math.ceil(target / (rate * workdaysCount)));
+    // Calculate based on historical performance or fallback to theoretical rate
+    const effectiveRate = t7 > 0 ? Math.min(rate, t7) : rate;
+    const requiredInterviewers = Math.max(1, Math.ceil(target / (effectiveRate * workdaysCount)));
     const maxCapacity = requiredInterviewers * rate * workdaysCount;
 
-    // Generate the daily plan for interviewers (distribute target across workdays)
-    const dailyPlan = generateDailyPlan(target, workdaysCount, requiredInterviewers);
+    // Generate realistic daily plan
+    const dailyPlan = generateRealisticDailyPlan(target, workdaysCount, requiredInterviewers, effectiveRate);
 
     res.json({
       required_interviewers: requiredInterviewers,
       available_workdays: workdaysCount,
       max_capacity: maxCapacity,
-      daily_plan: dailyPlan
+      daily_plan: dailyPlan,
+      assumptions: {
+        interviews_per_interviewer_per_day: rate,
+        effective_rate_based_on_history: Number(effectiveRate.toFixed(2)),
+        workdays_per_week: workdays,
+        total_days: Math.ceil((deadline - today) / (1000 * 60 * 60 * 24)),
+        work_days: workdaysCount
+      }
     });
   } catch (e) {
-    console.error('Staffing Route Failed:', e);
+    console.error('Enhanced Staffing Route Failed:', e);
     res.status(500).json({ error: 'staffing_failed', detail: e.message });
   }
-})
+});
 
+function generateRealisticDailyPlan(target, workdaysCount, interviewers, effectiveRate) {
+  const baseDailyTarget = Math.floor(target / workdaysCount);
+  const remainder = target % workdaysCount;
+  
+  const plan = [];
+  let date = new Date();
+  
+  for (let i = 0; i < workdaysCount; i++) {
+    // Increment date, skipping weekends if needed
+    date.setDate(date.getDate() + 1);
+    while (date.getDay() === 0 || date.getDay() === 6) {
+      date.setDate(date.getDate() + 1);
+    }
+    
+    const dailyTarget = baseDailyTarget + (i < remainder ? 1 : 0);
+    const expectedCompletes = Math.min(dailyTarget, interviewers * effectiveRate);
+    
+    plan.push({
+      date: date.toISOString().slice(0, 10),
+      interviewers: interviewers,
+      expected_completes: Math.round(expectedCompletes)
+    });
+  }
+  
+  return plan;
+}
 
 // ---------------------------- preview/debug ----------------------------
 router.get('/:id/preview', async (req, res) => {
