@@ -4,146 +4,116 @@ import { PrismaClient } from "@prisma/client";
 const router = express.Router();
 const prisma = new PrismaClient();
 
-console.log("[field.js] field routes loaded");
+console.log("[field.js] interviewers routes loaded");
 
-
-// 🧠 Get all researchers (for admin FieldMgmt.jsx)
+// 🧠 Get all interviewers (for FieldMgmt.jsx)
 router.get("/all", async (req, res) => {
   try {
-    const researchers = await prisma.fieldResearcher.findMany({
-      orderBy: { id: "desc" },
-    });
-    res.json(researchers);
-  } catch (err) {
-    console.error("Error fetching researchers:", err);
-    res.status(500).json({ error: "Failed to fetch researchers" });
-  }
-});
-
-
-// 🧩 Create new researcher
-router.post("/create", async (req, res) => {
-  try {
-    const { name, email, role, assignedProjects, status } = req.body;
-
-    if (!name || !email) {
-      return res.status(400).json({ error: "Name and email are required." });
-    }
-
-    // Avoid duplicates
-    const exists = await prisma.fieldResearcher.findUnique({ where: { email } });
-    if (exists) {
-      return res.status(400).json({ error: "A researcher with this email already exists." });
-    }
-
-    const newResearcher = await prisma.fieldResearcher.create({
-      data: {
-        name,
-        email,
-        role: role || "FR",
-        assignedGoals: `${assignedProjects || 0} assigned project(s)`,
-        progressDone: 0,
-        progressTarget: assignedProjects || 0,
-        nextCheckin: null,
+    const interviewers = await prisma.interviewers.findMany({
+      include: {
+        responses: {
+          select: { is_complete: true },
+        },
       },
     });
 
-    res.json(newResearcher);
+    // Compute number of completed interviews
+    const formatted = interviewers.map((i) => ({
+      id: i.id,
+      name: i.full_name || i.code, // fallback if full_name is null
+      completedCount: i.responses.filter((r) => r.is_complete).length,
+    }));
+
+    res.json(formatted);
   } catch (err) {
-    console.error("Error creating researcher:", err);
-    res.status(500).json({ error: "Failed to create researcher" });
+    console.error("Error fetching interviewers:", err);
+    res.status(500).json({ error: "Failed to fetch interviewers" });
   }
 });
 
-
-// ✏️ Update researcher info
+// ✏️ Edit interviewer info (placeholder for now)
 router.put("/update/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, role, assignedProjects, status } = req.body;
+    const { full_name, code } = req.body;
 
-    const updated = await prisma.fieldResearcher.update({
-      where: { id: Number(id) },
-      data: {
-        name,
-        role,
-        assignedGoals: `${assignedProjects} assigned project(s)`,
-        progressTarget: assignedProjects,
-        nextCheckin: null,
-      },
+    const updated = await prisma.interviewers.update({
+      where: { id },
+      data: { code },
     });
 
     res.json(updated);
   } catch (err) {
-    console.error("Error updating researcher:", err);
-    res.status(500).json({ error: "Failed to update researcher" });
+    console.error("Error updating interviewer:", err);
+    res.status(500).json({ error: "Failed to update interviewer" });
   }
 });
 
-
-// ⚙️ Suspend / Activate toggle
+// ⚙️ Suspend / Activate toggle (stub)
 router.put("/toggle-status/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const user = await prisma.fieldResearcher.findUnique({
-      where: { id: Number(id) },
-    });
-
-    if (!user) return res.status(404).json({ error: "Researcher not found" });
-
-    const newStatus =
-      user.assignedGoals === "Suspended" ? "Active" : "Suspended";
-
-    const updated = await prisma.fieldResearcher.update({
-      where: { id: Number(id) },
-      data: { assignedGoals: newStatus },
-    });
-
-    res.json(updated);
+    // since interviewers have no status column, we just return OK for now
+    res.json({ ok: true, message: "Suspend/Activate is not implemented yet" });
   } catch (err) {
     console.error("Error toggling status:", err);
-    res.status(500).json({ error: "Failed to toggle researcher status" });
+    res.status(500).json({ error: "Failed to toggle status" });
   }
 });
 
-
-// 📊 Dashboard (field researcher POV)
-router.get("/dashboard/:userId", async (req, res) => {
-  const { userId } = req.params;
-  const finalUserId = userId || 1; // fallback to 1 if not provided
-
+// 📊 Dashboard-like endpoint for individual interviewer
+router.get("/dashboard/:id", async (req, res) => {
   try {
-    let { userId } = req.params;
+    const { id } = req.params;
 
-    if (!userId || userId === "undefined") {
-      const firstUser = await prisma.fieldResearcher.findFirst();
-      if (!firstUser)
-        return res.status(404).json({ error: "No researchers found in database" });
-      userId = firstUser.id;
+    const interviewer = await prisma.interviewers.findUnique({
+      where: { id },
+      include: {
+        responses: {
+          select: { is_complete: true, duration_sec: true },
+        },
+      },
+    });
+
+    if (!interviewer) return res.status(404).json({ error: "Interviewer not found" });
+
+    const refreshed = await prisma.interviewers.findUnique({
+  where: { id },
+  include: {
+    responses: { select: { is_complete: true } },
+  },
+});
+
+res.json({
+  id: refreshed.id,
+  name: (refreshed.code || "").toUpperCase(),
+  completedCount: refreshed.responses.filter((r) => r.is_complete).length,
+});
+
+  } catch (err) {
+    console.error("Error fetching interviewer dashboard:", err);
+    res.status(500).json({ error: "Failed to fetch interviewer dashboard" });
+  }
+});
+
+// ➕ Add new interviewer
+router.post("/add", async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || !code.trim()) {
+      return res.status(400).json({ error: "Code (name) is required" });
     }
 
-    const user = await prisma.fieldResearcher.findUnique({
-      where: { id: Number(userId) },
+    const newInterviewer = await prisma.interviewers.create({
+      data: { code: code.trim().toUpperCase() },
     });
 
-    if (!user) return res.status(404).json({ error: "Researcher not found" });
-
-    res.json({
-      userId: user.id,
-      name: user.name,
-      goal: user.assignedGoals || "No goal assigned.",
-      progress: {
-        completed: user.progressDone,
-        target: user.progressTarget,
-      },
-      nextCheckin: user.nextCheckin || "No schedule yet.",
-    });
+    res.json(newInterviewer);
   } catch (err) {
-    console.error("Error fetching dashboard:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Error creating interviewer:", err);
+    res.status(500).json({ error: "Failed to add interviewer" });
   }
 });
-
 
 export default router;
