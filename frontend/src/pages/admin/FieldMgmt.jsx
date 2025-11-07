@@ -1,156 +1,122 @@
-// src/pages/admin/FieldMgmt.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Card } from "../../components/ui";
 import { createPortal } from "react-dom";
 
-const ROLES = [
-  { value: "FR", label: "Field Researcher" },
-  { value: "AN", label: "Analyst" },
-];
-const STATUSES = ["Active", "Suspended", "Inactive"];
-
-const API_BASE = import.meta.env.VITE_API_BASE || ""; // e.g. "" or "http://localhost:5050"
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export default function FieldMgmt() {
-  const [researchers, setResearchers] = useState([]);
+  const [interviewers, setInterviewers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Add / edit modal state
-  const [addOpen, setAddOpen] = useState(false);
+  // Modal states
   const [editOpen, setEditOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: "" });
 
-  const emptyForm = { name: "", email: "", role: "FR", status: "Active" };
-  const [form, setForm] = useState(emptyForm);
-
-  // fetch list
+  // Fetch interviewers
   useEffect(() => {
     (async () => {
       setLoading(true);
-      setError(null);
       try {
         const res = await fetch(`${API_BASE}/api/field/all`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setResearchers(Array.isArray(data) ? data : []);
+        setInterviewers(Array.isArray(data) ? data : []);
       } catch (err) {
-        console.error("Error fetching researchers:", err);
-        setError("Failed to load researchers.");
+        console.error("Error fetching interviewers:", err);
+        setError("Failed to load interviewers.");
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  const validateEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-
-  // Create
-  const addResearcher = async () => {
-    const payload = {
-      name: form.name.trim(),
-      email: form.email.trim(),
-      role: form.role,
-      status: form.status,
-    };
-    if (!payload.name) return alert("Name is required.");
-    if (!payload.email) return alert("Email is required.");
-    if (!validateEmail(payload.email)) return alert("Invalid email.");
-
-    try {
-      const res = await fetch(`${API_BASE}/api/field/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json();
-      if (!res.ok) {
-        return alert(body?.error || "Failed to create.");
-      }
-      setResearchers((p) => [body, ...p]);
-      setAddOpen(false);
-      setForm(emptyForm);
-    } catch (err) {
-      console.error(err);
-      alert("Something went wrong.");
-    }
-  };
-
   // Open edit modal
-  const openEdit = (r) => {
-    setEditing(r);
-    setForm({
-      name: r.name || "",
-      email: r.email || "",
-      role: r.role || "FR",
-      status: r.status || "Active",
-    });
+  const openEdit = (i) => {
+    setEditing(i);
+    setForm({ name: i.name });
     setEditOpen(true);
   };
 
   // Apply edit
   const applyEdit = async () => {
     if (!editing) return;
-    const payload = {
-      name: form.name.trim(),
-      email: form.email.trim(),
-      role: form.role,
-      status: form.status,
-    };
-    if (!payload.name) return alert("Name is required.");
-    if (!payload.email) return alert("Email is required.");
-    if (!validateEmail(payload.email)) return alert("Invalid email.");
+    const payload = { code: form.name.trim() };
+    if (!payload.code) return alert("Name/Code is required.");
 
     try {
-      const res = await fetch(`${API_BASE}/api/field/${editing.id}`, {
-        method: "PATCH",
+      const res = await fetch(`${API_BASE}/api/field/update/${editing.id}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const body = await res.json();
       if (!res.ok) return alert(body?.error || "Failed to update.");
-      setResearchers((prev) => prev.map((r) => (r.id === body.id ? body : r)));
+      setInterviewers((prev) => prev.map((i) => (i.id === body.id ? body : i)));
       setEditOpen(false);
       setEditing(null);
-      setForm(emptyForm);
+      setForm({ name: "" });
     } catch (err) {
       console.error(err);
       alert("Update failed.");
     }
   };
 
-  // Toggle suspend/activate
-  const toggleStatus = async (r) => {
+  // Add new interviewer
+  const addInterviewer = async () => {
+    const code = form.name.trim();
+    if (!code) return alert("Name/Code is required.");
+
     try {
-      const res = await fetch(`${API_BASE}/api/field/${r.id}/toggle-status`, {
-        method: "PATCH",
+      const res = await fetch(`${API_BASE}/api/field/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const body = await res.json();
+      if (!res.ok) return alert(body?.error || "Failed to add interviewer.");
+      setInterviewers((prev) => [body, ...prev]);
+      setAddOpen(false);
+      setForm({ name: "" });
+    } catch (err) {
+      console.error("Add interviewer failed:", err);
+      alert("Failed to add interviewer.");
+    }
+  };
+
+  // Suspend/Activate stub
+  const toggleStatus = async (i) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/field/toggle-status/${i.id}`, {
+        method: "PUT",
       });
       const body = await res.json();
       if (!res.ok) return alert(body?.error || "Failed to toggle status");
-      setResearchers((prev) => prev.map((x) => (x.id === body.id ? body : x)));
+      alert("Suspend/Activate placeholder executed.");
     } catch (err) {
       console.error(err);
-      alert("Failed to update status.");
+      alert("Failed to toggle status.");
     }
   };
 
   const countText = useMemo(
-    () => `Showing ${researchers.length} researcher${researchers.length !== 1 ? "s" : ""}`,
-    [researchers.length]
+    () => `Showing ${interviewers.length} interviewer${interviewers.length !== 1 ? "s" : ""}`,
+    [interviewers.length]
   );
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="ml-auto" />
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium">Field Interviewers</div>
         <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
-          Add Researcher
+          + Add Researcher
         </button>
       </div>
 
       <Card>
         <div className="p-4 border-b flex items-center justify-between">
-          <div className="text-sm font-medium">Researchers</div>
           <div className="text-xs text-zinc-500">{countText}</div>
         </div>
 
@@ -164,27 +130,22 @@ export default function FieldMgmt() {
                 <thead className="text-left text-zinc-500">
                   <tr className="border-b border-zinc-200">
                     <th className="p-3">Name</th>
-                    <th className="p-3">Email</th>
-                    <th className="p-3">Role</th>
-                    <th className="p-3">Status</th>
+                    <th className="p-3">Completed Interviews</th>
                     <th className="p-3">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {researchers.map((r) => (
-                    <tr key={r.id} className="border-b last:border-0">
-                      <td className="p-3">{r.name}</td>
-                      <td className="p-3">{r.email}</td>
-                      <td className="p-3">{r.role}</td>
-                      <td className="p-3">{r.status}</td>
+                  {interviewers.map((i) => (
+                    <tr key={i.id} className="border-b last:border-0">
+                      <td className="p-3">{i.name?.toUpperCase()}</td>
+                      <td className="p-3">{i.completedCount}</td>
                       <td className="p-3">
                         <div className="flex gap-2">
-                          <button className="btn btn-ghost" onClick={() => openEdit(r)}>Edit</button>
-                          <button
-                            className="btn btn-ghost"
-                            onClick={() => toggleStatus(r)}
-                          >
-                            {r.status === "Suspended" ? "Activate" : "Suspend"}
+                          <button className="btn btn-ghost" onClick={() => openEdit(i)}>
+                            Edit
+                          </button>
+                          <button className="btn btn-ghost" onClick={() => toggleStatus(i)}>
+                            Suspend
                           </button>
                         </div>
                       </td>
@@ -198,31 +159,33 @@ export default function FieldMgmt() {
       </Card>
 
       {/* Add modal */}
-      <NeatModal open={addOpen} onClose={() => setAddOpen(false)} title="Add Researcher">
+      <NeatModal open={addOpen} onClose={() => setAddOpen(false)} title="Add Interviewer">
         <form
           className="grid grid-cols-1 gap-4"
           onSubmit={(e) => {
             e.preventDefault();
-            addResearcher();
+            addInterviewer();
           }}
         >
           <Label>Name</Label>
-          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <Label>Email</Label>
-          <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <Label>Role</Label>
-          <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} options={ROLES} />
-          <Label>Status</Label>
-          <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} options={STATUSES.map((s) => ({ value: s, label: s }))} />
+          <Input
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="Enter interviewer name/code"
+          />
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" className="btn btn-ghost" onClick={() => setAddOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Add</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setAddOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Add
+            </button>
           </div>
         </form>
       </NeatModal>
 
       {/* Edit modal */}
-      <NeatModal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Researcher">
+      <NeatModal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Interviewer">
         <form
           className="grid grid-cols-1 gap-4"
           onSubmit={(e) => {
@@ -232,15 +195,13 @@ export default function FieldMgmt() {
         >
           <Label>Name</Label>
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <Label>Email</Label>
-          <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <Label>Role</Label>
-          <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} options={ROLES} />
-          <Label>Status</Label>
-          <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} options={STATUSES.map((s) => ({ value: s, label: s }))} />
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" className="btn btn-ghost" onClick={() => { setEditOpen(false); setEditing(null); }}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Save</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setEditOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Save
+            </button>
           </div>
         </form>
       </NeatModal>
@@ -255,19 +216,13 @@ function Label({ children }) {
 function Input(props) {
   return <input {...props} className="input w-full rounded-xl border px-3 py-2 text-sm shadow-sm" />;
 }
-function Select({ options = [], ...rest }) {
-  return (
-    <select {...rest} className="input w-full rounded-xl border px-3 py-[9px] text-sm shadow-sm">
-      {options.map((o) => (
-        <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
-      ))}
-    </select>
-  );
-}
 function NeatModal({ open, onClose, title, children }) {
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+    >
       <div className="bg-white rounded-xl p-4 w-full max-w-md shadow-xl">
         <div className="flex justify-between items-center mb-3">
           <h3 className="text-sm font-semibold">{title}</h3>

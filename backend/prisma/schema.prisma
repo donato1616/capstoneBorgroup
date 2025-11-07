@@ -78,17 +78,3 @@ model studies {
   created_at DateTime    @default(now()) @db.Timestamptz(6)
   responses  responses[]
 }
-
-model FieldResearcher {
-  id             Int       @id @default(autoincrement())
-  name           String
-  email          String    @unique
-  role           String?   @default("FR")
-  assignedgoals  String?
-  progressdone   Int?      @default(0)
-  progresstarget Int?      @default(0)
-  nextcheckin    String?
-  createdat      DateTime? @default(now()) @db.Timestamp(6)
-  updatedat      DateTime? @default(now()) @db.Timestamp(6)
-  status         String?   @default("Active")
-}
