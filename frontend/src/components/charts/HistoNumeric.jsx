@@ -1,9 +1,9 @@
 // frontend/src/components/charts/HistoNumeric.jsx
 import {
-    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid
+    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell
   } from "recharts";
   
-  export default function HistoNumeric({ bins = [], height = 220 }) {
+  export default function HistoNumeric({ bins = [], height = 220, barColor }) {
     const data = (bins || []).map(b => ({
       name: `${(Math.round(b.lo*100)/100)}–${(Math.round(b.hi*100)/100)}`,
       value: b.count
@@ -17,7 +17,14 @@ import {
             <XAxis dataKey="name" interval={0} tick={{ fontSize: 11 }} />
             <YAxis />
             <Tooltip />
-            <Bar dataKey="value" />
+            <Bar dataKey="value">
+              {data.map((entry, index) => (
+                <Cell 
+                  key={`cell-${index}`} 
+                  fill={barColor ? barColor(index, data.length) : "#8884d8"} 
+                />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>

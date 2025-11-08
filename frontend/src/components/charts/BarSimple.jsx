@@ -1,7 +1,7 @@
 // BarSimple.jsx
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from "recharts";
 
-export default function BarSimple({ data = [], xKey = "label", yKey = "value", height = 240 }) {
+export default function BarSimple({ data = [], xKey = "label", yKey = "value", height = 240, barColor }) {
   return (
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer>
@@ -10,7 +10,14 @@ export default function BarSimple({ data = [], xKey = "label", yKey = "value", h
           <XAxis dataKey={xKey} tick={{ fontSize: 12 }} />
           <YAxis allowDecimals={false} />
           <Tooltip />
-          <Bar dataKey={yKey} />
+          <Bar dataKey={yKey}>
+            {data.map((entry, index) => (
+              <Cell 
+                key={`cell-${index}`} 
+                fill={barColor ? barColor(index, data.length) : "#8884d8"} 
+              />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>

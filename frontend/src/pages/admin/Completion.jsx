@@ -11,6 +11,7 @@ export default function Completion() {
   const [byRegion, setByRegion] = useState([]);
   const [byInterviewer, setByInterviewer] = useState([]);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
 
   async function fetchJSON(url) {
     const r = await fetch(url);
@@ -19,20 +20,39 @@ export default function Completion() {
   }
 
   useEffect(() => {
-    if (!datasetId) return;
+    if (!datasetId) {
+      setDaily([]);
+      setByRegion([]);
+      setByInterviewer([]);
+      return;
+    }
+    
     (async () => {
       try {
+        setLoading(true);
         setErr("");
         const [d1, d2, d3] = await Promise.all([
           fetchJSON(`${API_BASE}/api/dataset/${datasetId}/completion/daily`),
           fetchJSON(`${API_BASE}/api/dataset/${datasetId}/completion/by-region`),
           fetchJSON(`${API_BASE}/api/dataset/${datasetId}/completion/by-interviewer`)
         ]);
-        setDaily((d1.items||[]).map(r => ({ date: String(r.d).slice(0,10), value: r.cnt })));
+        
+        console.log("Daily completion data:", d1); // Debug log
+        
+        // Transform the data to ensure proper format
+        const dailyData = (d1.items || []).map(r => ({ 
+          date: String(r.d).slice(0,10), 
+          value: r.cnt 
+        }));
+        
+        setDaily(dailyData);
         setByRegion(d2.items || []);
         setByInterviewer(d3.items || []);
       } catch (e) {
-        console.error(e); setErr("Failed to load completion analytics.");
+        console.error("Completion data error:", e); 
+        setErr("Failed to load completion analytics.");
+      } finally {
+        setLoading(false);
       }
     })();
   }, [datasetId]);
@@ -44,15 +64,31 @@ export default function Completion() {
       <DatasetSelector onSelectDataset={setDatasetId} />
       {!datasetId && <div className="p-4 text-sm text-zinc-600">Select a dataset</div>}
       {err && <div className="chip bg-amber-50 border-amber-300 text-amber-800">{err}</div>}
+      {loading && <div className="p-4 text-sm text-zinc-600">Loading completion data...</div>}
 
       {datasetId && (
         <>
           <Card className="p-4">
             <div className="text-sm font-medium mb-3">Completion Progress Over Time</div>
-            {daily.length
-              ? <LineTimeseries data={daily} xKey="date" yKey="value" yLabel="Completed" />
-              : <div className="text-sm text-zinc-500">No dated completions.</div>}
-            <div className="mt-3 text-sm text-zinc-700">Total: <b>{total}</b></div>
+            {daily.length ? (
+              <>
+                <LineTimeseries 
+                  data={daily} 
+                  xKey="date" 
+                  yKey="value" 
+                  yLabel="Completed" 
+                  seriesName="Completed"
+                />
+                <div className="mt-3 text-sm text-zinc-700">
+                  Total completed interviews: <b>{total}</b>
+                </div>
+                
+              </>
+            ) : (
+              <div className="text-sm text-zinc-500">
+                {loading ? "Loading..." : "No dated completions found."}
+              </div>
+            )}
           </Card>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
