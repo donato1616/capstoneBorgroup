@@ -142,46 +142,128 @@ export default function PredictiveInsights() {
   const fmt = (v, d = 3) => (v == null ? '—' : Number(v).toFixed(d));
   const unit   = data?.unit || 'respondents/day';
 
-  // respondents/day series (for your existing charts)
-  const historySeries = useMemo(() => {
-    if (!data?.history?.length) return [];
-    return [
-      { name: 'Actual',  data: data.history.map(x => ({ date: x.date, value: x.actual })) },
-      { name: 'Fitted',  data: data.history.map(x => ({ date: x.date, value: x.fitted })) },
-    ];
-  }, [data]);
+  // Create a single combined series that properly overlaps all data
+  const combinedSeries = useMemo(() => {
+    if (mode === 'respondents' && data) {
+      const historyData = data.history || [];
+      const forecastData = data.horizon || [];
+      
+      // Create combined series with all three lines
+      return [
+        { 
+          name: 'Actual',  
+          data: historyData.map(x => ({ date: x.date, value: x.actual })) 
+        },
+        { 
+          name: 'Fitted',  
+          data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
+        },
+        { 
+          name: 'Forecast', 
+          data: [
+            // Include the last fitted point to connect to forecast
+            ...(historyData.length > 0 ? [{
+              date: historyData[historyData.length - 1].date,
+              value: historyData[historyData.length - 1].fitted
+            }] : []),
+            // Include all forecast points
+            ...forecastData.map(x => ({ date: x.date, value: x.projected }))
+          ]
+        }
+      ];
+    }
+    return [];
+  }, [data, mode]);
 
-  const forecastSeries = useMemo(() => {
-    if (!data?.horizon?.length) return [];
-    return [{ name: 'Forecast', data: data.horizon.map(x => ({ date: x.date, value: x.projected })) }];
-  }, [data]);
-
-  const hasTime = ((historySeries[0]?.data?.length || 0) > 1) || (forecastSeries[0]?.data?.length || 0) > 0;
-
-  // numeric question series
+  // numeric question series - ensure proper overlap
   const numSeries = useMemo(() => {
-    if (!numData?.history) return [];
-    const hist = [
-      { name: 'Actual', data: numData.history.map(x => ({ date: x.date, value: x.actual })) },
-      { name: 'Fitted', data: numData.history.map(x => ({ date: x.date, value: x.fitted })) },
+    if (!numData?.history || !numData?.horizon) return [];
+    
+    const historyData = numData.history || [];
+    const forecastData = numData.horizon || [];
+    
+    return [
+      { 
+        name: 'Actual', 
+        data: historyData.map(x => ({ date: x.date, value: x.actual })) 
+      },
+      { 
+        name: 'Fitted', 
+        data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
+      },
+      { 
+        name: 'Forecast', 
+        data: [
+          // Connect forecast to the last fitted point
+          ...(historyData.length > 0 ? [{
+            date: historyData[historyData.length - 1].date,
+            value: historyData[historyData.length - 1].fitted
+          }] : []),
+          ...forecastData.map(x => ({ date: x.date, value: x.projected }))
+        ]
+      }
     ];
-    const f = (numData.horizon || []).map(x => ({ date: x.date, value: x.projected }));
-    return f.length ? [...hist, { name: 'Forecast', data: f }] : hist;
   }, [numData]);
 
   // categorical question series (multiple labels)
   const catSeries = useMemo(() => {
-    if (!catData?.labels?.length) return [];
+    if (!catData?.labels?.length || !catData?.series) return [];
+    
     const out = [];
     for (const label of catData.labels.slice(0, catTopK)) {
-      const s = catData.series?.[label] || [];
-      const h = catData.horizon?.[label] || [];
-      out.push({ name: `Actual: ${label}`,  data: s.map(x => ({ date: x.date, value: x.actual })) });
-      out.push({ name: `Fitted: ${label}`,  data: s.map(x => ({ date: x.date, value: x.fitted })) });
-      if (h.length) out.push({ name: `Forecast: ${label}`, data: h.map(x => ({ date: x.date, value: x.projected })) });
+      const historyData = catData.series?.[label] || [];
+      const forecastData = catData.horizon?.[label] || [];
+      
+      out.push({ 
+        name: `Actual: ${label}`,  
+        data: historyData.map(x => ({ date: x.date, value: x.actual })) 
+      });
+      out.push({ 
+        name: `Fitted: ${label}`,  
+        data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
+      });
+      
+      if (forecastData.length) {
+        out.push({ 
+          name: `Forecast: ${label}`, 
+          data: [
+            // Connect forecast to the last fitted point
+            ...(historyData.length > 0 ? [{
+              date: historyData[historyData.length - 1].date,
+              value: historyData[historyData.length - 1].fitted
+            }] : []),
+            ...forecastData.map(x => ({ date: x.date, value: x.projected }))
+          ]
+        });
+      }
     }
     return out;
   }, [catData, catTopK]);
+
+  const hasTime = (combinedSeries[0]?.data?.length || 0) > 1;
+
+  // Helper function to determine color based on metric performance
+  const getMetricColor = (metric, value, baseline = null) => {
+    if (value == null) return 'text-zinc-400';
+    
+    switch (metric) {
+      case 'r2':
+        return value >= 0.8 ? 'text-green-600' : value >= 0.6 ? 'text-amber-600' : 'text-red-600';
+      case 'rmse':
+      case 'mse':
+      case 'mape':
+      case 'smape':
+        // For error metrics, lower is better
+        if (baseline && value < baseline) return 'text-green-600';
+        return value < 0.1 ? 'text-green-600' : value < 0.3 ? 'text-amber-600' : 'text-red-600';
+      case 'improvement':
+        return value > 0 ? 'text-green-600' : 'text-red-600';
+      case 'mase':
+        return value < 1 ? 'text-green-600' : value < 2 ? 'text-amber-600' : 'text-red-600';
+      default:
+        return 'text-zinc-800';
+    }
+  };
 
   // ---------------- render ----------------
   return (
@@ -254,18 +336,79 @@ export default function PredictiveInsights() {
       {/* ==== KPI row (respondents/day) ==== */}
       {mode === 'respondents' && (
         <div className="grid grid-cols-1 sm:grid-cols-8 gap-3">
-          <Card className="p-4"><div className="text-xs text-zinc-500">R²</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.r2)}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">MSE</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.mse)}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">RMSE ({unit})</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.rmse)}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">Baseline RMSE ({unit})</div><div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.baseline_rmse)}</div></Card>
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">R²</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', data?.metrics?.r2)}`}>
+              {fmt(data?.metrics?.r2)}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Target: ≥0.8 • Perfect: 1.0</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">MSE</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('mse', data?.metrics?.mse)}`}>
+              {fmt(data?.metrics?.mse)}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Lower is better • Closer to 0</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">RMSE ({unit})</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', data?.metrics?.rmse, data?.metrics?.baseline_rmse)}`}>
+              {fmt(data?.metrics?.rmse)}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">
+              Baseline: {fmt(data?.metrics?.baseline_rmse)} • Lower is better
+            </div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">Baseline RMSE ({unit})</div>
+            <div className="text-2xl font-semibold mt-1 text-zinc-800">
+              {fmt(data?.metrics?.baseline_rmse)}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Simple forecast baseline • Compare to model RMSE</div>
+          </Card>
+          
           <Card className="p-4">
             <div className="text-xs text-zinc-500">MASE</div>
-            <div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.mase)}</div>
-        </Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">Improvement vs Baseline</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.improvement_vs_baseline == null ? '—' : `${(data.metrics.improvement_vs_baseline * 100).toFixed(1)}%`}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">MAPE</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.mape == null ? '—' : `${(data.metrics.mape * 100).toFixed(1)}%`}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">sMAPE (bounded)</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.smape == null ? '—' : `${(data.metrics.smape * 100).toFixed(1)}%`}</div></Card>
-          <Card className="p-4"><div className="text-xs text-zinc-500">MAPE (≥5)</div><div className="text-2xl font-semibold mt-1">{data?.metrics?.mape_floor5 == null ? '—' : `${(data.metrics.mape_floor5 * 100).toFixed(1)}%`}</div></Card>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('mase', data?.metrics?.mase)}`}>
+              {fmt(data?.metrics?.mase)}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Target: &lt;1 • Better than naive forecast</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">Improvement vs Baseline</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('improvement', data?.metrics?.improvement_vs_baseline)}`}>
+              {data?.metrics?.improvement_vs_baseline == null ? '—' : `${(data.metrics.improvement_vs_baseline * 100).toFixed(1)}%`}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Positive = Better than baseline • Higher is better</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">MAPE</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('mape', data?.metrics?.mape)}`}>
+              {data?.metrics?.mape == null ? '—' : `${(data.metrics.mape * 100).toFixed(1)}%`}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Target: &lt;10% • Lower is better</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">sMAPE (bounded)</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('smape', data?.metrics?.smape)}`}>
+              {data?.metrics?.smape == null ? '—' : `${(data.metrics.smape * 100).toFixed(1)}%`}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Symmetric MAPE • Target: &lt;10%</div>
+          </Card>
+          
+          <Card className="p-4">
+            <div className="text-xs text-zinc-500">MAPE (≥5)</div>
+            <div className={`text-2xl font-semibold mt-1 ${getMetricColor('mape', data?.metrics?.mape_floor5)}`}>
+              {data?.metrics?.mape_floor5 == null ? '—' : `${(data.metrics.mape_floor5 * 100).toFixed(1)}%`}
+            </div>
+            <div className="text-xs text-zinc-400 mt-1">Filtered for values ≥5 • Lower is better</div>
+          </Card>
         </div>
       )}
 
@@ -273,35 +416,42 @@ export default function PredictiveInsights() {
       {mode === 'respondents' && (
         <>
           <Card className="p-4">
-            <div className="text-sm font-medium mb-2">7-Day Forecast (Simple)</div>
+            <div className="text-sm font-medium mb-2">7-Day Forecast - All Series Overlapping</div>
             {loading && <div className="text-sm text-zinc-500">Computing…</div>}
             {!loading && err && <div className="text-sm text-rose-600">Error: {err}</div>}
             {!loading && !err && !hasTime
               ? <div className="text-sm text-zinc-500">Insufficient dated history to fit a model.</div>
-              : <LineTimeseries series={[...historySeries, ...forecastSeries]} />
+              : (
+                <>
+                  <LineTimeseries 
+                    series={combinedSeries} 
+                    yLabel={unit}
+                    xLabel="Date"
+                  />
+                  <div className="mt-3 text-xs text-zinc-500 grid grid-cols-3 gap-2">
+                    <div><span className="inline-block w-3 h-3 bg-[#0ea5e9] mr-1"></span> Actual: Historical data points</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#6366f1] mr-1"></span> Fitted: Model predictions for historical period</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#f59e0b] mr-1 border border-amber-600"></span> Forecast: 7-day future projections</div>
+                  </div>
+                </>
+              )
             }
-          </Card>
-
-          <Card className="p-4">
-            <div className="text-sm font-medium mb-2">7-Day Forecast (Detailed with Baseline)</div>
-            {loading && <div className="text-sm text-zinc-500">Computing…</div>}
-            {!loading && err && <div className="text-sm text-rose-600">Error: {err}</div>}
-            {!loading && !err && hasTime && (
-              <RegressionChart history={data?.history || []} horizon={data?.horizon || []} unit={unit} />
-            )}
-            {!loading && !err && !hasTime && (
-              <div className="text-sm text-zinc-500">Insufficient dated history to fit a model.</div>
-            )}
           </Card>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Card className="p-4">
               <div className="text-xs text-zinc-500">OOS RMSE ({unit})</div>
-              <div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.oos_rmse)}</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', data?.metrics?.oos_rmse)}`}>
+                {fmt(data?.metrics?.oos_rmse)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Out-of-sample error • Lower is better</div>
             </Card>
             <Card className="p-4">
               <div className="text-xs text-zinc-500">OOS R²</div>
-              <div className="text-2xl font-semibold mt-1">{fmt(data?.metrics?.oos_r2)}</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', data?.metrics?.oos_r2)}`}>
+                {fmt(data?.metrics?.oos_r2)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Out-of-sample fit • Target: ≥0.8</div>
             </Card>
           </div>
         </>
@@ -311,11 +461,47 @@ export default function PredictiveInsights() {
       {mode === 'numeric' && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-            <Card className="p-4"><div className="text-xs text-zinc-500">R²</div><div className="text-2xl font-semibold mt-1">{fmt(numData?.metrics?.r2)}</div></Card>
-            <Card className="p-4"><div className="text-xs text-zinc-500">RMSE</div><div className="text-2xl font-semibold mt-1">{fmt(numData?.metrics?.rmse)}</div></Card>
-            <Card className="p-4"><div className="text-xs text-zinc-500">Baseline RMSE</div><div className="text-2xl font-semibold mt-1">{fmt(numData?.metrics?.baseline_rmse)}</div></Card>
-            <Card className="p-4"><div className="text-xs text-zinc-500">sMAPE</div><div className="text-2xl font-semibold mt-1">{numData?.metrics?.smape == null ? '—' : `${(numData.metrics.smape * 100).toFixed(1)}%`}</div></Card>
-            <Card className="p-4"><div className="text-xs text-zinc-500">MAPE (≥5)</div><div className="text-2xl font-semibold mt-1">{numData?.metrics?.mape_floor5 == null ? '—' : `${(numData.metrics.mape_floor5 * 100).toFixed(1)}%`}</div></Card>
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">R²</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', numData?.metrics?.r2)}`}>
+                {fmt(numData?.metrics?.r2)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Target: ≥0.8 • Perfect: 1.0</div>
+            </Card>
+            
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">RMSE</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', numData?.metrics?.rmse, numData?.metrics?.baseline_rmse)}`}>
+                {fmt(numData?.metrics?.rmse)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">
+                Baseline: {fmt(numData?.metrics?.baseline_rmse)} • Lower is better
+              </div>
+            </Card>
+            
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">Baseline RMSE</div>
+              <div className="text-2xl font-semibold mt-1 text-zinc-800">
+                {fmt(numData?.metrics?.baseline_rmse)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Simple forecast baseline • Compare to model RMSE</div>
+            </Card>
+            
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">sMAPE</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('smape', numData?.metrics?.smape)}`}>
+                {numData?.metrics?.smape == null ? '—' : `${(numData.metrics.smape * 100).toFixed(1)}%`}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Symmetric MAPE • Target: &lt;10%</div>
+            </Card>
+            
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">MAPE (≥5)</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('mape', numData?.metrics?.mape_floor5)}`}>
+                {numData?.metrics?.mape_floor5 == null ? '—' : `${(numData.metrics.mape_floor5 * 100).toFixed(1)}%`}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Filtered for values ≥5 • Lower is better</div>
+            </Card>
           </div>
 
           <Card className="p-4">
@@ -324,7 +510,20 @@ export default function PredictiveInsights() {
             {!numLoading && numErr && <div className="text-sm text-rose-600">Error: {numErr}</div>}
             {!numLoading && !numErr && (!numData?.history?.length)
               ? <div className="text-sm text-zinc-500">No data detected for this question/interval.</div>
-              : <LineTimeseries series={numSeries} />
+              : (
+                <>
+                  <LineTimeseries 
+                    series={numSeries} 
+                    yLabel={`${numAgg} value`}
+                    xLabel="Date"
+                  />
+                  <div className="mt-3 text-xs text-zinc-500 grid grid-cols-3 gap-2">
+                    <div><span className="inline-block w-3 h-3 bg-[#0ea5e9] mr-1"></span> Actual: Historical values</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#6366f1] mr-1"></span> Fitted: Model predictions</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#f59e0b] mr-1 border border-amber-600"></span> Forecast: Future projections</div>
+                  </div>
+                </>
+              )
             }
           </Card>
         </>
@@ -339,7 +538,20 @@ export default function PredictiveInsights() {
             {!catLoading && catErr && <div className="text-sm text-rose-600">Error: {catErr}</div>}
             {!catLoading && !catErr && (!catData?.labels?.length)
               ? <div className="text-sm text-zinc-500">No top labels detected for this question.</div>
-              : <LineTimeseries series={catSeries} />
+              : (
+                <>
+                  <LineTimeseries 
+                    series={catSeries} 
+                    yLabel={catAsShare ? 'Percentage Share' : 'Response Count'}
+                    xLabel="Date"
+                  />
+                  <div className="mt-3 text-xs text-zinc-500">
+                    <div><span className="inline-block w-3 h-3 bg-[#0ea5e9] mr-1"></span> Actual: Historical response patterns</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#6366f1] mr-1"></span> Fitted: Model predictions for each category</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#f59e0b] mr-1 border border-amber-600"></span> Forecast: Future category trends</div>
+                  </div>
+                </>
+              )
             }
           </Card>
         </>
