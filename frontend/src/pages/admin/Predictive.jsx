@@ -7,6 +7,146 @@ import RegressionChart from '../../components/charts/RegressionChart';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5050';
 
+// Data Validation Component
+function ForecastingDiagnostics({ data, numData, catData, mode }) {
+  // Add std function if not available
+  Math.std = function(arr) {
+    if (!arr || arr.length === 0) return 0;
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / arr.length;
+    return Math.sqrt(variance);
+  };
+
+  const analyzeDataQuality = (dataset, type) => {
+    if (!dataset?.history?.length) return { status: 'No data', issues: [] };
+    
+    const issues = [];
+    const values = dataset.history.map(h => h.actual).filter(v => v != null);
+    
+    if (values.length < 10) issues.push(`Insufficient data points: ${values.length} (need 10+)`);
+    if (values.length >= 2) {
+      const variance = Math.std(values);
+      if (variance < 0.01) issues.push('Low variance (near-constant values)');
+      if (variance === 0) issues.push('Zero variance (all values identical)');
+    }
+    
+    // Check for outliers
+    if (values.length >= 5) {
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+      const std = Math.std(values);
+      const outliers = values.filter(v => Math.abs(v - avg) > 3 * std);
+      if (outliers.length > values.length * 0.1) issues.push(`Many outliers: ${outliers.length}/${values.length}`);
+    }
+
+    // Check date range and gaps
+    if (dataset.history.length >= 2) {
+      const dates = dataset.history.map(h => new Date(h.date)).sort((a, b) => a - b);
+      const dateRange = (dates[dates.length - 1] - dates[0]) / (1000 * 60 * 60 * 24);
+      if (dateRange < 7) issues.push(`Short time range: ${dateRange.toFixed(1)} days (need 7+ days)`);
+      
+      // Check for gaps
+      let gaps = 0;
+      for (let i = 1; i < dates.length; i++) {
+        const gap = (dates[i] - dates[i-1]) / (1000 * 60 * 60 * 24);
+        if (gap > 3) gaps++;
+      }
+      if (gaps > dates.length * 0.2) issues.push(`Many date gaps: ${gaps} gaps detected`);
+    }
+    
+    return {
+      status: issues.length ? 'Poor' : 'Good',
+      dataPoints: values.length,
+      dateRange: dataset.history.length ? 
+        `${new Date(dataset.history[0].date).toLocaleDateString()} to ${new Date(dataset.history[dataset.history.length-1].date).toLocaleDateString()}` : 'N/A',
+      issues
+    };
+  };
+
+  const getDataForMode = () => {
+    switch (mode) {
+      case 'respondents': return data;
+      case 'numeric': return numData;
+      case 'categorical': 
+        // For categorical, analyze the first series if available
+        if (catData?.series && Object.keys(catData.series).length > 0) {
+          const firstSeries = Object.values(catData.series)[0];
+          return { history: firstSeries.map(item => ({ date: item.date, actual: item.actual })) };
+        }
+        return null;
+      default: return null;
+    }
+  };
+
+  const currentData = getDataForMode();
+  const analysis = analyzeDataQuality(currentData, mode);
+
+  return (
+    <Card className="p-4 bg-blue-50 border-blue-200">
+      <div className="text-sm font-medium mb-3">Forecasting Diagnostics</div>
+      
+      <div className="space-y-4 text-xs">
+        <div>
+          <div className="font-medium">Current Mode: {mode.toUpperCase()}</div>
+          <div className="mt-2">
+            <div><strong>Status:</strong> <span className={analysis.status === 'Good' ? 'text-green-600' : 'text-red-600'}>{analysis.status}</span></div>
+            <div><strong>Data Points:</strong> {analysis.dataPoints}</div>
+            <div><strong>Date Range:</strong> {analysis.dateRange}</div>
+          </div>
+        </div>
+        
+        {analysis.issues.length > 0 && (
+          <div>
+            <div className="font-medium text-amber-700">Issues Detected:</div>
+            <ul className="list-disc list-inside ml-2 mt-1">
+              {analysis.issues.map((issue, index) => (
+                <li key={index} className="text-amber-700">{issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {analysis.status === 'Good' && (
+          <div className="text-green-700">
+            ✓ Data quality is sufficient for forecasting
+          </div>
+        )}
+        
+        <div>
+          <div className="font-medium">Data Requirements for Good Forecasting:</div>
+          <ul className="list-disc list-inside ml-2 mt-1">
+            <li>Minimum 10+ data points for time series</li>
+            <li>Significant variance in values (not constant)</li>
+            <li>Regular time intervals preferred</li>
+            <li>Limited missing data/outliers</li>
+            <li>At least 7+ days of historical data</li>
+          </ul>
+        </div>
+
+        {/* Quick Fix Suggestions */}
+        {analysis.issues.length > 0 && (
+          <div>
+            <div className="font-medium text-blue-700">Suggested Actions:</div>
+            <ul className="list-disc list-inside ml-2 mt-1">
+              {analysis.issues.some(i => i.includes('Insufficient data')) && (
+                <li>Collect more data over a longer time period</li>
+              )}
+              {analysis.issues.some(i => i.includes('variance')) && (
+                <li>Check if data aggregation is too coarse - try different intervals</li>
+              )}
+              {analysis.issues.some(i => i.includes('outliers')) && (
+                <li>Review data for anomalies or data entry errors</li>
+              )}
+              {analysis.issues.some(i => i.includes('date gaps')) && (
+                <li>Ensure consistent daily data collection</li>
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function PredictiveInsights() {
   const [datasetId, setDatasetId] = useState('');
 
@@ -45,7 +185,7 @@ export default function PredictiveInsights() {
       try {
         setLoading(true); setErr(''); setData(null);
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/predict/regression`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${r.status}`);
         const data = await res.json();
         
         // Check if the data is reliable (no extreme values or NaN)
@@ -69,7 +209,7 @@ export default function PredictiveInsights() {
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/questions/schema`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${r.status}`);
         const js = await res.json();
         setQSchema(js.items || []);
         const firstNum = (js.items || []).find(x => x.kind === 'numeric')?.question || '';
@@ -94,7 +234,7 @@ export default function PredictiveInsights() {
         url.searchParams.set('agg', numAgg);
         url.searchParams.set('interval', numInterval);
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${r.status}`);
         const numData = await res.json();
   
         // Validate if data is structured correctly and contains the required fields
@@ -122,7 +262,7 @@ export default function PredictiveInsights() {
         url.searchParams.set('top_k', String(catTopK));
         url.searchParams.set('as_share', catAsShare ? '1' : '0');
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${r.status}`);
         const catData = await res.json();
   
         // Validate if the data has labels and series to render
@@ -555,6 +695,16 @@ export default function PredictiveInsights() {
             }
           </Card>
         </>
+      )}
+
+      {/* Data Validation Diagnostics - Always show when we have data */}
+      {(data || numData || catData) && (
+        <ForecastingDiagnostics 
+          data={data} 
+          numData={numData} 
+          catData={catData} 
+          mode={mode} 
+        />
       )}
     </div>
   );
