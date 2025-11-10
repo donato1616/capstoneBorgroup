@@ -181,7 +181,6 @@ const [activeField, setActiveField] = useState("home");  // field tabs
               <span className="font-medium text-zinc-900">{labelForField(activeField)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <button className="btn-ghost"><Bell size={18} /></button>
               <button className="btn-ghost"><Download size={16} /> Export</button>
               <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
@@ -237,7 +236,6 @@ const [activeField, setActiveField] = useState("home");  // field tabs
               <span className="font-medium text-zinc-900">{labelForAnalyst(activeAnalyst)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <button className="btn-ghost"><Bell size={18} /></button>
               <button className="btn-ghost"><Download size={16} /> Export</button>
               <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
@@ -297,7 +295,6 @@ const [activeField, setActiveField] = useState("home");  // field tabs
         <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
           <Breadcrumb active={active} />
           <div className="flex items-center gap-2">
-            <button className="btn-ghost"><Bell size={18} /></button>
             <button className="btn-ghost"><Download size={16} /> Export</button>
             <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
           </div>
