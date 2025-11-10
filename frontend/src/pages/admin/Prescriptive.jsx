@@ -164,7 +164,7 @@ export default function PrescriptiveInsights() {
             <div className="text-2xl font-semibold mt-1">{plan.available_workdays}</div>
           </div>
           <div className="rounded-xl border border-zinc-200 bg-white p-4">
-            <div className="text-xs text-zinc-500">Capacity (max completes)</div>
+            <div className="text-xs text-zinc-500">Capacity (max completion)</div>
             <div className="text-2xl font-semibold mt-1">{plan.max_capacity}</div>
           </div>
 
@@ -176,7 +176,7 @@ export default function PrescriptiveInsights() {
                   <tr className="text-left border-b">
                     <th className="py-1 pr-4">Date</th>
                     <th className="py-1 pr-4">Assigned Interviewers</th>
-                    <th className="py-1 pr-4">Expected Completes</th>
+                    <th className="py-1 pr-4">Expected Completion</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -213,7 +213,7 @@ export default function PrescriptiveInsights() {
                 <tr className="text-left border-b">
                   <th className="py-1 pr-4">Region</th>
                   <th className="py-1 pr-4">Historical Share</th>
-                  <th className="py-1 pr-4">Assigned Completes</th>
+                  <th className="py-1 pr-4">Assigned Completion</th>
                 </tr>
               </thead>
               <tbody>
