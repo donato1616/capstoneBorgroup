@@ -7,6 +7,11 @@ import RegressionChart from '../../components/charts/RegressionChart';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5050';
 
+// Helper function to validate dataset ID
+function isValidDatasetId(datasetId) {
+  return datasetId && datasetId.length > 0 && datasetId !== 'undefined' && datasetId !== 'null';
+}
+
 // Data Validation Component
 function ForecastingDiagnostics({ data, numData, catData, mode }) {
   // Add std function if not available
@@ -180,12 +185,18 @@ export default function PredictiveInsights() {
 
   // ---------- fetch respondents/day regression ----------
   useEffect(() => {
-    if (!datasetId || mode !== 'respondents') { return; }
+    if (!isValidDatasetId(datasetId) || mode !== 'respondents') { 
+      setData(null);
+      return; 
+    }
+    
     (async () => {
       try {
-        setLoading(true); setErr(''); setData(null);
+        setLoading(true); 
+        setErr(''); 
+        setData(null);
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/predict/regression`);
-        if (!res.ok) throw new Error(`HTTP ${r.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         
         // Check if the data is reliable (no extreme values or NaN)
@@ -205,36 +216,57 @@ export default function PredictiveInsights() {
 
   // ---------- fetch question schema whenever dataset changes ----------
   useEffect(() => {
-    if (!datasetId) { setQSchema([]); setQNum(''); setQCat(''); return; }
+    if (!isValidDatasetId(datasetId)) { 
+      setQSchema([]); 
+      setQNum(''); 
+      setQCat(''); 
+      return; 
+    }
+    
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/questions/schema`);
-        if (!res.ok) throw new Error(`HTTP ${r.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const js = await res.json();
         setQSchema(js.items || []);
-        const firstNum = (js.items || []).find(x => x.kind === 'numeric')?.question || '';
-        const firstCat = (js.items || []).find(x => x.kind === 'categorical')?.question || '';
-        setQNum(firstNum || '');
-        setQCat(firstCat || '');
+        
+        // Only set defaults if we have questions
+        if (js.items && js.items.length > 0) {
+          const firstNum = js.items.find(x => x.kind === 'numeric')?.question || '';
+          const firstCat = js.items.find(x => x.kind === 'categorical')?.question || '';
+          setQNum(firstNum);
+          setQCat(firstCat);
+        } else {
+          setQNum('');
+          setQCat('');
+        }
       } catch (e) {
         console.error(e);
         setQSchema([]);
+        setQNum('');
+        setQCat('');
       }
     })();
   }, [datasetId]);
 
   // ---------- fetch numeric question forecast ----------
   useEffect(() => {
-    if (!datasetId || !qNum || mode !== 'numeric') { setNumData(null); return; }
+    if (!isValidDatasetId(datasetId) || !qNum || mode !== 'numeric') { 
+      setNumData(null); 
+      return; 
+    }
+    
     (async () => {
       try {
-        setNumLoading(true); setNumErr(''); setNumData(null);
+        setNumLoading(true); 
+        setNumErr(''); 
+        setNumData(null);
         const url = new URL(`${API_BASE}/api/dataset/${datasetId}/predict/question/numeric`);
         url.searchParams.set('questionCode', qNum);
         url.searchParams.set('agg', numAgg);
         url.searchParams.set('interval', numInterval);
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${r.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const numData = await res.json();
   
         // Validate if data is structured correctly and contains the required fields
@@ -250,19 +282,26 @@ export default function PredictiveInsights() {
       }
     })();
   }, [datasetId, qNum, numAgg, numInterval, mode]);
+
   // ---------- fetch categorical question forecast ----------
   useEffect(() => {
-    if (!datasetId || !qCat || mode !== 'categorical') { setCatData(null); return; }
+    if (!isValidDatasetId(datasetId) || !qCat || mode !== 'categorical') { 
+      setCatData(null); 
+      return; 
+    }
+    
     (async () => {
       try {
-        setCatLoading(true); setCatErr(''); setCatData(null);
+        setCatLoading(true); 
+        setCatErr(''); 
+        setCatData(null);
         const url = new URL(`${API_BASE}/api/dataset/${datasetId}/predict/question/categorical`);
         url.searchParams.set('questionCode', qCat);
         url.searchParams.set('interval', catInterval);
         url.searchParams.set('top_k', String(catTopK));
         url.searchParams.set('as_share', catAsShare ? '1' : '0');
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${r.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const catData = await res.json();
   
         // Validate if the data has labels and series to render
@@ -278,6 +317,7 @@ export default function PredictiveInsights() {
       }
     })();
   }, [datasetId, qCat, catInterval, catTopK, catAsShare, mode]);
+
   // ---------------- common helpers ----------------
   const fmt = (v, d = 3) => (v == null ? '—' : Number(v).toFixed(d));
   const unit   = data?.unit || 'respondents/day';
@@ -345,27 +385,33 @@ export default function PredictiveInsights() {
     ];
   }, [numData]);
 
-  // categorical question series (multiple labels)
+  // categorical question series (multiple labels) - IMPROVED VERSION
   const catSeries = useMemo(() => {
     if (!catData?.labels?.length || !catData?.series) return [];
     
     const out = [];
-    for (const label of catData.labels.slice(0, catTopK)) {
+    
+    // Use the actual category names from the data
+    const categories = catData.labels.slice(0, catTopK);
+    
+    categories.forEach((label, index) => {
       const historyData = catData.series?.[label] || [];
       const forecastData = catData.horizon?.[label] || [];
       
+      // Each category gets its own color, with Actual/Fitted/Forecast variations
       out.push({ 
-        name: `Actual: ${label}`,  
+        name: `${label} - Actual`,  
         data: historyData.map(x => ({ date: x.date, value: x.actual })) 
       });
+      
       out.push({ 
-        name: `Fitted: ${label}`,  
+        name: `${label} - Fitted`,  
         data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
       });
       
       if (forecastData.length) {
         out.push({ 
-          name: `Forecast: ${label}`, 
+          name: `${label} - Forecast`, 
           data: [
             // Connect forecast to the last fitted point
             ...(historyData.length > 0 ? [{
@@ -376,7 +422,8 @@ export default function PredictiveInsights() {
           ]
         });
       }
-    }
+    });
+    
     return out;
   }, [catData, catTopK]);
 
@@ -410,68 +457,79 @@ export default function PredictiveInsights() {
     <div className="space-y-4">
       <DatasetSelector onSelectDataset={setDatasetId} />
 
-      {/* Mode switch */}
-      <Card className="p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <div className="text-sm font-medium">Mode:</div>
-          <select className="border rounded px-2 py-1"
-                  value={mode}
-                  onChange={e => setMode(e.target.value)}>
-            <option value="respondents">Respondents / day (current)</option>
-            <option value="numeric">Numeric Question forecast</option>
-            <option value="categorical">Categorical/Text Question forecast</option>
-          </select>
+      {/* Show message when no dataset is selected */}
+      {!isValidDatasetId(datasetId) && (
+        <Card className="p-4 bg-amber-50 border-amber-200">
+          <div className="text-amber-800">
+            Please select a dataset to view predictive insights.
+          </div>
+        </Card>
+      )}
 
-          {/* Numeric controls */}
-          {mode === 'numeric' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="ml-2 text-sm">Question:</span>
-              <select className="border rounded px-2 py-1"
-                      value={qNum}
-                      onChange={e => setQNum(e.target.value)}>
-                <option value="">— choose numeric —</option>
-                {qSchema.filter(x=>x.kind==='numeric').map(x=>(
-                <option key={x.question} value={x.question}>{x.label || x.question}</option>
+      {/* Mode switch - only show when dataset is selected */}
+      {isValidDatasetId(datasetId) && (
+        <Card className="p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <div className="text-sm font-medium">Mode:</div>
+            <select className="border rounded px-2 py-1"
+                    value={mode}
+                    onChange={e => setMode(e.target.value)}>
+              <option value="respondents">Respondents / day (current)</option>
+              <option value="numeric">Numeric Question forecast</option>
+              <option value="categorical">Categorical/Text Question forecast</option>
+            </select>
+
+            {/* Numeric controls */}
+            {mode === 'numeric' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="ml-2 text-sm">Question:</span>
+                <select className="border rounded px-2 py-1"
+                        value={qNum}
+                        onChange={e => setQNum(e.target.value)}>
+                  <option value="">— choose numeric —</option>
+                  {qSchema.filter(x=>x.kind==='numeric').map(x=>(
+                  <option key={x.question} value={x.question}>{x.label || x.question}</option>
+                  ))}
+                </select>
+                <span className="text-sm">Agg:</span>
+                <select className="border rounded px-2 py-1" value={numAgg} onChange={e=>setNumAgg(e.target.value)}>
+                  <option value="avg">avg</option><option value="sum">sum</option><option value="count">count</option>
+                </select>
+                <span className="text-sm">Interval:</span>
+                <select className="border rounded px-2 py-1" value={numInterval} onChange={e=>setNumInterval(e.target.value)}>
+                  <option value="day">day</option><option value="week">week</option><option value="month">month</option>
+                </select>
+              </div>
+            )}
+
+            {/* Categorical controls */}
+            {mode === 'categorical' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="ml-2 text-sm">Question:</span>
+                <select className="border rounded px-2 py-1"
+                        value={qCat}
+                        onChange={e => setQCat(e.target.value)}>
+                  <option value="">— choose categorical —</option>
+                {qSchema.filter(x=>x.kind==='categorical').map(x=>(
+                  <option key={x.question} value={x.question}>{x.label || x.question}</option>
                 ))}
-              </select>
-              <span className="text-sm">Agg:</span>
-              <select className="border rounded px-2 py-1" value={numAgg} onChange={e=>setNumAgg(e.target.value)}>
-                <option value="avg">avg</option><option value="sum">sum</option><option value="count">count</option>
-              </select>
-              <span className="text-sm">Interval:</span>
-              <select className="border rounded px-2 py-1" value={numInterval} onChange={e=>setNumInterval(e.target.value)}>
-                <option value="day">day</option><option value="week">week</option><option value="month">month</option>
-              </select>
-            </div>
-          )}
-
-          {/* Categorical controls */}
-          {mode === 'categorical' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="ml-2 text-sm">Question:</span>
-              <select className="border rounded px-2 py-1"
-                      value={qCat}
-                      onChange={e => setQCat(e.target.value)}>
-                <option value="">— choose categorical —</option>
-              {qSchema.filter(x=>x.kind==='categorical').map(x=>(
-                <option key={x.question} value={x.question}>{x.label || x.question}</option>
-              ))}
-              </select>
-              <span className="text-sm">Top-K:</span>
-              <input className="border rounded px-2 py-1 w-16" type="number" min="1" max="10"
-                     value={catTopK} onChange={e=>setCatTopK(Number(e.target.value || 1))}/>
-              <span className="text-sm">Interval:</span>
-              <select className="border rounded px-2 py-1" value={catInterval} onChange={e=>setCatInterval(e.target.value)}>
-                <option value="day">day</option><option value="week">week</option><option value="month">month</option>
-              </select>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={catAsShare} onChange={e=>setCatAsShare(e.target.checked)} />
-                Show as share (%)
-              </label>
-            </div>
-          )}
-        </div>
-      </Card>
+                </select>
+                <span className="text-sm">Top-K:</span>
+                <input className="border rounded px-2 py-1 w-16" type="number" min="1" max="10"
+                       value={catTopK} onChange={e=>setCatTopK(Number(e.target.value || 1))}/>
+                <span className="text-sm">Interval:</span>
+                <select className="border rounded px-2 py-1" value={catInterval} onChange={e=>setCatInterval(e.target.value)}>
+                  <option value="day">day</option><option value="week">week</option><option value="month">month</option>
+                </select>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={catAsShare} onChange={e=>setCatAsShare(e.target.checked)} />
+                  Show as share (%)
+                </label>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* ==== KPI row (respondents/day) ==== */}
       {mode === 'respondents' && (

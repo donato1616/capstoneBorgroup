@@ -11,17 +11,32 @@ import {
   Legend,
 } from "recharts";
 
-// High-contrast color palette, consistent across the app
+// Extended color palette for multiple categories
+const COLOR_PALETTE = [
+  "#0ea5e9", // sky-500
+  "#6366f1", // indigo-500
+  "#f59e0b", // amber-500
+  "#10b981", // emerald-500
+  "#ef4444", // red-500
+  "#8b5cf6", // violet-500
+  "#06b6d4", // cyan-500
+  "#84cc16", // lime-500
+  "#f97316", // orange-500
+  "#ec4899", // pink-500
+  "#14b8a6", // teal-500
+  "#a855f7", // purple-500
+];
+
+// Default colors for standard series types
 const SERIES_COLORS = {
-  Actual: "#0ea5e9", // sky-500
-  Fitted: "#6366f1", // indigo-500
-  Forecast: "#f59e0b", // amber-500
-  Baseline: "#6b7280", // gray-500 (use dashed)
-  Completed: "#10b981", // emerald-500 for completion data
+  Actual: "#0ea5e9",
+  Fitted: "#6366f1",
+  Forecast: "#f59e0b",
+  Baseline: "#6b7280",
+  Completed: "#10b981",
 };
 
 function mergeSeries(series) {
-  // series = [{ name, data: [{date, value}, ...] }, ...]
   const allDates = new Set();
   for (const s of series || []) {
     for (const p of s.data || []) allDates.add(p.date);
@@ -34,7 +49,6 @@ function mergeSeries(series) {
   return rows;
 }
 
-// New function to handle single series data (for backward compatibility)
 function transformSingleSeries(data, xKey, yKey, seriesName = "Completed") {
   if (!data || !data.length) return { series: [], data: [] };
   
@@ -48,6 +62,44 @@ function transformSingleSeries(data, xKey, yKey, seriesName = "Completed") {
   
   const mergedData = mergeSeries(series);
   return { series, data: mergedData };
+}
+
+// Function to assign colors to series based on their type and category
+function assignSeriesColors(series) {
+  const categoryMap = new Map();
+  let categoryIndex = 0;
+  
+  return series.map(s => {
+    // Check if this is a standard series type (Actual, Fitted, Forecast)
+    const isStandardType = Object.keys(SERIES_COLORS).some(type => 
+      s.name === type || s.name.startsWith(`${type}:`)
+    );
+    
+    let color;
+    
+    if (isStandardType) {
+      // For standard types, use the predefined colors
+      const baseType = s.name.split(':')[0]; // Extract "Actual", "Fitted", or "Forecast"
+      color = SERIES_COLORS[baseType] || SERIES_COLORS.Actual;
+    } else {
+      // For categorical data, assign colors based on the category
+      const categoryName = s.name.split(':').pop()?.trim() || s.name;
+      
+      if (!categoryMap.has(categoryName)) {
+        categoryMap.set(categoryName, COLOR_PALETTE[categoryIndex % COLOR_PALETTE.length]);
+        categoryIndex++;
+      }
+      
+      color = categoryMap.get(categoryName);
+    }
+    
+    return {
+      ...s,
+      color,
+      // Determine if this should be a dashed line (forecast lines)
+      isDashed: s.name.includes("Forecast") || s.name === "Baseline"
+    };
+  });
 }
 
 export default function LineTimeseries({ 
@@ -74,6 +126,11 @@ export default function LineTimeseries({
     }
     return { transformedSeries: [], transformedData: [] };
   }, [series, data, xKey, yKey, seriesName]);
+
+  // Assign colors to the series
+  const coloredSeries = useMemo(() => {
+    return assignSeriesColors(transformedSeries);
+  }, [transformedSeries]);
 
   if (!transformedData.length) {
     return <div className="text-sm text-zinc-500">No time series data.</div>;
@@ -112,23 +169,19 @@ export default function LineTimeseries({
           />
           <Legend />
 
-          {/* Draw lines with consistent colors + dashes for forecast/baseline */}
-          {transformedSeries.map((s) => {
-            const color = SERIES_COLORS[s.name] || "#10b981"; // fallback emerald
-            const dashed = s.name === "Forecast" || s.name === "Baseline";
-            return (
-              <Line
-                key={s.name}
-                type="monotone"
-                dataKey={s.name}
-                stroke={color}
-                dot={{ fill: color, r: 3 }}
-                strokeWidth={2}
-                strokeDasharray={dashed ? "6 6" : "0"}
-                isAnimationActive={false}
-              />
-            );
-          })}
+          {/* Draw lines with assigned colors */}
+          {coloredSeries.map((s) => (
+            <Line
+              key={s.name}
+              type="monotone"
+              dataKey={s.name}
+              stroke={s.color}
+              dot={{ fill: s.color, r: 3 }}
+              strokeWidth={2}
+              strokeDasharray={s.isDashed ? "6 6" : "0"}
+              isAnimationActive={false}
+            />
+          ))}
         </LineChart>
       </ResponsiveContainer>
     </div>
