@@ -1,10 +1,9 @@
 // src/pages/Login.jsx
 import { Shield, User, Users, BarChart3, Eye, EyeOff, CheckCircle2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import Signup from "./SignUp.jsx";
+import Signup from "./SignUp.jsx"; //ignore this. This function was deleted
 
 export default function Login({ onLogin }) {
-  // Persisted pre-auth view (role & mode)
   const [role, setRole] = useState(() => localStorage.getItem("auth_role") || null);
   const [mode, setMode] = useState(() => localStorage.getItem("auth_mode") || "login");
 
@@ -18,58 +17,55 @@ export default function Login({ onLogin }) {
   }, [mode]);
 
   // Login form state
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [pw, setPw] = useState("");
   const [showPw, setShowPw] = useState(false);
-
-  // Flash message (e.g., "Account created successfully...")
   const [flash, setFlash] = useState(() => localStorage.getItem("auth_flash") || "");
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    if (mode === "login") {
-      // Prefill email once after a signup
-      const signupEmail = localStorage.getItem("signup_email");
-      if (signupEmail && !email) setEmail(signupEmail);
-    }
-  }, [mode]); // eslint-disable-line
-
-  // Optional: auto-clear flash after a few seconds
   useEffect(() => {
     if (!flash) return;
     const t = setTimeout(() => {
       setFlash("");
       localStorage.removeItem("auth_flash");
-    }, 5000);
+    }, 5050);
     return () => clearTimeout(t);
   }, [flash]);
 
   function resetAuthFields() {
-    setEmail("");
+    setName("");
     setPw("");
     setShowPw(false);
+    setError("");
   }
 
-  function handleLoginSubmit(e) {
+  async function handleLoginSubmit(e) {
     e.preventDefault();
-    if (!email || !pw) return;
+    setError("");
 
-    const display = role === "admin" ? "Admin" : role === "field" ? "Field Researcher" : "Analyst";
-    const userObj = { name: display, email, role };
-    const token = `${role}-demo-token`;
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, name, password: pw }),
+      });
 
-    localStorage.setItem("auth_user", JSON.stringify(userObj));
-    localStorage.setItem("auth_token", token);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Login failed");
 
-    // tidy up one-time items
-    localStorage.removeItem("auth_role");
-    localStorage.removeItem("auth_mode");
-    localStorage.removeItem("auth_flash");
-    localStorage.removeItem("signup_email");
+      const userObj = data.user;
+      localStorage.setItem("auth_user", JSON.stringify(userObj));
+      localStorage.setItem("auth_token", data.token);
+      localStorage.removeItem("auth_role");
+      localStorage.removeItem("auth_mode");
+      localStorage.removeItem("auth_flash");
 
-    onLogin(userObj);
+      onLogin(userObj);
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
-  // ===== Step 1 — Role selection =====
   if (!role) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-zinc-50 p-6">
@@ -83,22 +79,16 @@ export default function Login({ onLogin }) {
           <p className="text-sm text-zinc-600 mb-6">Choose how you want to sign in</p>
 
           <div className="flex flex-col gap-4">
-            <button
-              onClick={() => { setRole("admin"); setMode("login"); resetAuthFields(); }}
-              className="flex items-center justify-center gap-2 rounded-xl bg-olive-700 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-olive-800"
-            >
+            <button onClick={() => { setRole("admin"); setMode("login"); resetAuthFields(); }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-olive-700 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-olive-800">
               <User size={18} /> Admin Login
             </button>
-            <button
-              onClick={() => { setRole("analyst"); setMode("login"); resetAuthFields(); }}
-              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-            >
+            <button onClick={() => { setRole("analyst"); setMode("login"); resetAuthFields(); }}
+              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
               <BarChart3 size={18} /> Analyst Login
             </button>
-            <button
-              onClick={() => { setRole("field"); setMode("login"); resetAuthFields(); }}
-              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-            >
+            <button onClick={() => { setRole("field"); setMode("login"); resetAuthFields(); }}
+              className="flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50">
               <Users size={18} /> Field Researcher Login
             </button>
           </div>
@@ -107,39 +97,15 @@ export default function Login({ onLogin }) {
     );
   }
 
-  // ===== Step 2 — Signup page (separate component) =====
-  if (mode === "signup") {
-    return (
-      <Signup
-        role={role}
-        onBackToLogin={() => {
-          setMode("login");
-          // Keep the success flash and email for the login screen
-          setFlash(localStorage.getItem("auth_flash") || "");
-        }}
-        onBackToRoleSelection={() => {
-          setMode("login");
-          setRole(null);
-          localStorage.removeItem("auth_role");
-          localStorage.setItem("auth_mode", "login");
-        }}
-      />
-    );
-  }
-
-  // ===== Step 2 — Role-specific Login screen =====
   const roleTitle = role === "admin" ? "Admin" : role === "field" ? "Field Researcher" : "Analyst";
   const roleSubtitle =
     role === "admin" ? "Admin Console" : role === "field" ? "Field Researcher Portal" : "Analyst Workspace";
 
   return (
     <div className="flex h-screen w-full">
-      {/* Left: brand panel (unchanged) */}
       <div className="hidden md:flex flex-col justify-between w-1/2 bg-olive-700 text-white p-10">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">
-            EB
-          </div>
+          <div className="h-10 w-10 rounded-xl bg-white text-olive-700 grid place-items-center font-bold shadow-sm">EB</div>
           <div>
             <div className="text-lg font-semibold">EBRS Insights</div>
             <div className="text-xs text-white/80">{roleSubtitle}</div>
@@ -158,7 +124,6 @@ export default function Login({ onLogin }) {
         <div className="text-xs text-white/60">&copy; {new Date().getFullYear()} EBRS</div>
       </div>
 
-      {/* Right: card form (unchanged) */}
       <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
         <div className="w-full max-w-sm">
           <div className="mb-6 text-center md:hidden">
@@ -172,30 +137,31 @@ export default function Login({ onLogin }) {
             <h2 className="text-xl font-semibold text-zinc-900">{roleTitle} Login</h2>
             <p className="mt-1 text-sm text-zinc-600">Use your {roleTitle.toLowerCase()} credentials</p>
 
-            {/* Success flash (same theme) */}
-            {flash ? (
+            {flash && (
               <div className="mt-4 mb-2 flex items-start gap-2 rounded-xl border border-olive-200 bg-olive-50 px-3 py-2 text-sm text-olive-800">
                 <CheckCircle2 className="mt-[2px]" size={16} />
                 <div className="flex-1">{flash}</div>
-                <button
-                  type="button"
-                  onClick={() => { setFlash(""); localStorage.removeItem("auth_flash"); }}
-                  className="text-olive-700/70 hover:text-olive-900"
-                  aria-label="Dismiss"
-                >
+                <button onClick={() => { setFlash(""); localStorage.removeItem("auth_flash"); }}
+                  className="text-olive-700/70 hover:text-olive-900" aria-label="Dismiss">
                   <X size={16} />
                 </button>
               </div>
-            ) : null}
+            )}
+
+            {error && (
+              <div className="mt-4 mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                {error}
+              </div>
+            )}
 
             <form onSubmit={handleLoginSubmit} className="mt-4 space-y-4">
               <div>
-                <label className="block text-sm mb-1">Email</label>
+                <label className="block text-sm mb-1">Name</label>
                 <input
-                  type="email"
+                  type="text"
                   className="w-full rounded-xl border px-3 py-2 text-sm border-zinc-300 focus:border-olive-500"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   required
                 />
               </div>
@@ -212,7 +178,7 @@ export default function Login({ onLogin }) {
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPw((v) => !v)}
+                    onClick={() => setShowPw(v => !v)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-700"
                     aria-label="Toggle password visibility"
                   >
@@ -228,28 +194,19 @@ export default function Login({ onLogin }) {
                 Sign in
               </button>
 
-              <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode("login");
-                    setRole(null);
-                    localStorage.removeItem("auth_role");
-                    localStorage.setItem("auth_mode", "login");
-                    setFlash(""); localStorage.removeItem("auth_flash");
-                  }}
-                  className="mt-2 text-xs text-zinc-500 hover:underline"
-                >
-                  ← Back to role selection
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode("signup")}
-                  className="mt-2 text-xs text-olive-700 hover:underline"
-                >
-                  Create an account
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setRole(null);
+                  localStorage.removeItem("auth_role");
+                  localStorage.setItem("auth_mode", "login");
+                  setFlash(""); localStorage.removeItem("auth_flash");
+                }}
+                className="mt-2 text-xs text-zinc-500 hover:underline"
+              >
+                ← Back to role selection
+              </button>
             </form>
           </div>
         </div>

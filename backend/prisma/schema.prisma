@@ -78,3 +78,19 @@ model studies {
   created_at DateTime    @default(now()) @db.Timestamptz(6)
   responses  responses[]
 }
+
+model RolePasswords {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role     String? @db.VarChar(50)
+  password String? @db.VarChar(100)
+}
+
+model Admins {
+  id   String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String? @db.VarChar(50)
+}
+
+model Analysts {
+  id   String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String? @db.VarChar(50)
+}
