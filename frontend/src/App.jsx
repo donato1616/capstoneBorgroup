@@ -39,7 +39,6 @@ import DataExplorer from "./pages/analyst/DataExplorer.jsx";
 import AnalystProfile from "./pages/analyst/Profile.jsx";
 
 import DatasetSelector from "./components/DatasetSelector.jsx";
-import DatasetAnalytics from "./components/DatasetAnalytics.jsx";
 
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
@@ -120,7 +119,6 @@ const [activeField, setActiveField] = useState("home");  // field tabs
 
   // ====== Dataset selection (Admin Overview) ======
   const [selectedDataset, setSelectedDataset] = useState("");
-  const [filters, setFilters] = useState({ region: "", isComplete: undefined });
 
   // ====== Logout ======
   function handleLogout() {
@@ -305,30 +303,6 @@ const [activeField, setActiveField] = useState("home");  // field tabs
             <div>
               <h2 className="text-xl font-semibold mb-4">Dataset Analytics</h2>
               <DatasetSelector onSelectDataset={setSelectedDataset} />
-              <div className="my-4 flex gap-4">
-                <label>
-                  Region:
-                  <input type="text" value={filters.region} onChange={(e) => setFilters({ ...filters, region: e.target.value })} className="ml-2 px-2 py-1 border rounded" />
-                </label>
-                <label>
-                  Completed:
-                  <select
-                    value={filters.isComplete === undefined ? "" : String(!!filters.isComplete)}
-                    onChange={(e) =>
-                      setFilters({
-                        ...filters,
-                        isComplete: e.target.value === "" ? undefined : e.target.value === "true",
-                      })
-                    }
-                    className="ml-2 px-2 py-1 border rounded"
-                  >
-                    <option value="">All</option>
-                    <option value="true">Completed</option>
-                    <option value="false">Not Completed</option>
-                  </select>
-                </label>
-              </div>
-              <DatasetAnalytics datasetId={selectedDataset} filters={filters} />
               <Overview selectedDataset={selectedDataset} />
             </div>
           )}
