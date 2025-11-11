@@ -103,8 +103,6 @@ export default function Overview({ selectedDataset }) {
       {err && <div className="chip bg-amber-50 border-amber-300 text-amber-800">{err}</div>}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Filter label="Client" /><Filter label="Project" />
-        <Filter label="Survey" /><Filter label="Date Range" />
         <div className="ml-auto">
           <button
             onClick={deleteDataset}
