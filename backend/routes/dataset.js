@@ -19,6 +19,146 @@ const SKIP_DUPLICATES = String(process.env.SKIP_DUPLICATES || '1') === '1';
 const UPLOAD_STORAGE = (process.env.UPLOAD_STORAGE || 'disk').toLowerCase(); // 'disk' | 'memory'
 const COMPLETION_DENSITY_PCT = Number(process.env.COMPLETION_DENSITY_PCT || 0.7);
 
+// Add enhanced forecasting configuration
+const FORECASTING_MIN_POINTS = Number(process.env.FORECASTING_MIN_POINTS || 10);
+const FORECASTING_MIN_DAYS = Number(process.env.FORECASTING_MIN_DAYS || 7);
+const FORECASTING_MIN_VARIANCE = Number(process.env.FORECASTING_MIN_VARIANCE || 0.1);
+
+
+// --------- Enhanced Forecasting Diagnostics ---------
+function analyzeForecastingReadiness(dailySeries, datasetInfo = {}) {
+  const points = dailySeries.length;
+  const dates = dailySeries.map(d => new Date(d.date));
+  const minDate = new Date(Math.min(...dates));
+  const maxDate = new Date(Math.max(...dates));
+  const dayRange = (maxDate - minDate) / (1000 * 60 * 60 * 24);
+  
+  // Calculate variance and data quality metrics
+  const values = dailySeries.map(d => d.count || d.completed || d.y || 0);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+  const stdDev = Math.sqrt(variance);
+  const cv = mean > 0 ? stdDev / mean : 0; // coefficient of variation
+  
+  // Check for constant values
+  const uniqueValues = new Set(values);
+  const isConstant = uniqueValues.size <= 1;
+  
+  // Check for regular intervals
+  let regularIntervals = true;
+  let missingData = false;
+  if (points > 1) {
+    const expectedInterval = dayRange / (points - 1);
+    for (let i = 1; i < points; i++) {
+      const actualInterval = (dates[i] - dates[i-1]) / (1000 * 60 * 60 * 24);
+      if (Math.abs(actualInterval - expectedInterval) > expectedInterval * 0.5) {
+        regularIntervals = false;
+      }
+    }
+    
+    // Check for missing dates in sequence
+    const fullDateRange = [];
+    for (let d = new Date(minDate); d <= maxDate; d.setDate(d.getDate() + 1)) {
+      fullDateRange.push(d.toISOString().slice(0, 10));
+    }
+    const actualDates = new Set(dailySeries.map(d => d.date));
+    const missingDates = fullDateRange.filter(date => !actualDates.has(date));
+    missingData = missingDates.length > 0;
+  }
+  
+  // Determine status with enhanced criteria
+  let status = 'Excellent';
+  let issues = [];
+  
+  if (points < FORECASTING_MIN_POINTS) {
+    issues.push(`Insufficient data points: ${points} (need ${FORECASTING_MIN_POINTS}+)`);
+    status = points >= 7 ? 'Fair' : 'Poor';
+  }
+  
+  if (dayRange < FORECASTING_MIN_DAYS) {
+    issues.push(`Short time range: ${dayRange.toFixed(1)} days (need ${FORECASTING_MIN_DAYS}+ days)`);
+    status = 'Poor';
+  }
+  
+  if (isConstant || cv < FORECASTING_MIN_VARIANCE) {
+    issues.push(`Low variance in values: coefficient of variation ${cv.toFixed(3)} (need > ${FORECASTING_MIN_VARIANCE})`);
+    if (status === 'Excellent') status = 'Fair';
+  }
+  
+  if (!regularIntervals) {
+    issues.push('Irregular time intervals detected');
+    if (status === 'Excellent') status = 'Good';
+  }
+  
+  if (missingData) {
+    issues.push('Missing data points in date sequence');
+    if (status === 'Excellent') status = 'Good';
+  }
+  
+  // If no issues and meets enhanced criteria
+  if (issues.length === 0 && points >= 14 && dayRange >= 14 && cv >= 0.2) {
+    status = 'Excellent';
+  } else if (issues.length === 0) {
+    status = 'Good';
+  }
+  
+  return {
+    status,
+    dataPoints: points,
+    dateRange: `${minDate.toISOString().slice(0, 10)} to ${maxDate.toISOString().slice(0, 10)}`,
+    dayRange: dayRange,
+    variance: cv,
+    isConstant,
+    regularIntervals,
+    missingData,
+    issues,
+    dataQuality: {
+      coefficientOfVariation: cv,
+      meanValue: mean,
+      standardDeviation: stdDev,
+      dataDensity: points / Math.max(1, dayRange)
+    },
+    requirements: {
+      minimumPoints: FORECASTING_MIN_POINTS,
+      minimumDays: FORECASTING_MIN_DAYS,
+      minimumVariance: FORECASTING_MIN_VARIANCE,
+      regularIntervals: true,
+      limitedMissingData: true
+    },
+    suggestions: generateDataSuggestions(points, dayRange, cv, regularIntervals, missingData)
+  };
+}
+
+function generateDataSuggestions(points, dayRange, variance, regularIntervals, missingData) {
+  const suggestions = [];
+  
+  if (points < 10) {
+    suggestions.push(`Collect more data: currently ${points} points, need 10+ for reliable forecasting`);
+  }
+  
+  if (dayRange < 7) {
+    suggestions.push(`Extend data collection period: currently ${dayRange.toFixed(1)} days, need 7+ days`);
+  }
+  
+  if (variance < 0.1) {
+    suggestions.push('Data shows little variation - consider collecting data under different conditions');
+  }
+  
+  if (!regularIntervals) {
+    suggestions.push('Collect data at regular intervals for better time series analysis');
+  }
+  
+  if (missingData) {
+    suggestions.push('Fill in missing dates in your data sequence');
+  }
+  
+  if (suggestions.length === 0) {
+    suggestions.push('Data quality is sufficient for advanced forecasting models');
+  }
+  
+  return suggestions;
+}
+
 // ---------------------------- upload middlewares ----------------------------
 const memoryUpload = multer({
   storage: multer.memoryStorage(),
@@ -181,81 +321,347 @@ function prettyQuestionLabel(code, sampleText) {
   return s;
 }
 
-// --------- OLS helpers (shared by multiple endpoints) ---------
+// --------- OLS (Ordinary Least Squares) Linear Regression ---------
 function olsFit(points) {
   const n = points.length;
-  const sx  = points.reduce((s,p)=>s + p.x, 0);
-  const sy  = points.reduce((s,p)=>s + p.y, 0);
-  const sxx = points.reduce((s,p)=>s + p.x*p.x, 0);
-  const sxy = points.reduce((s,p)=>s + p.x*p.y, 0);
-  const denom = (n * sxx - sx * sx) || 1;
-
-  const a = (n * sxy - sx * sy) / denom;
-  const b = (sy - a * sx) / n;
-
-  // predictions (keep non-negative), DO NOT round here so errors are unbiased
-  const yhat = points.map(p => Math.max(0, a * p.x + b));
-  const ybar = sy / n;
-
-  // ---- standard errors ----
-  const mse  = points.reduce((s,p,i)=> s + Math.pow(p.y - yhat[i], 2), 0) / n;
-  const rmse = Math.sqrt(mse);
-  const ssRes = points.reduce((s,p,i)=> s + Math.pow(p.y - yhat[i], 2), 0);
-  const ssTot = points.reduce((s,p)=> s + Math.pow(p.y - ybar, 2), 0) || 1;
-  const r2    = 1 - (ssRes / ssTot);
-
-  const baselineMSE  = points.reduce((s,p)=> s + Math.pow(p.y - ybar, 2), 0) / n;
-  const baselineRMSE = Math.sqrt(baselineMSE);
-  const improvement  = baselineRMSE > 0 ? (1 - rmse / baselineRMSE) : null;
-
-  const mae  = points.reduce((s,p,i)=> s + Math.abs(p.y - yhat[i]), 0) / n;
-  const wape = points.reduce((s,p,i)=> s + Math.abs(p.y - yhat[i]), 0) /
-               (points.reduce((s,p)=> s + Math.abs(p.y), 0) || 1);
-
-  const mapeArr = points.map((p,i)=> p.y !== 0 ? Math.abs((p.y - yhat[i]) / p.y) : null).filter(v=>v!==null);
-  const mape    = mapeArr.length ? (mapeArr.reduce((s,v)=>s+v,0)/mapeArr.length) : null;
-
-  const MAPE_FLOOR = 5;
-  const mapeFloorArr = points.map((p,i)=> p.y >= MAPE_FLOOR ? Math.abs((p.y - yhat[i]) / p.y) : null).filter(v=>v!==null);
-  const mape_floor5 = mapeFloorArr.length ? (mapeFloorArr.reduce((s,v)=>s+v,0)/mapeFloorArr.length) : null;
-
-  const EPS = 1e-9;
-  const smapeArr = points.map((p,i)=>{
-    const denom = Math.abs(p.y) + Math.abs(yhat[i]) + EPS;
-    return (2 * Math.abs(p.y - yhat[i])) / denom;
-  });
-  const smape = smapeArr.reduce((s,v)=>s+v,0)/smapeArr.length;
-
-  // ---- MASE (Mean Absolute Scaled Error) ----
-  // Scale by the in-sample naive (lag-1) MAE. If flat series -> null.
-  let mase = null, mase_denom = null;
-  if (n >= 2) {
-    const denomAbs = points.slice(1).reduce((s,p,i)=> s + Math.abs(p.y - points[i].y), 0) / (n - 1);
-    mase_denom = denomAbs > 0 ? denomAbs : null;
-    if (mase_denom) mase = mae / mase_denom;
+  if (n < 2) {
+    return simpleFallbackModel(points);
   }
 
+  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+  for (const p of points) {
+    sumX += p.x;
+    sumY += p.y;
+    sumXY += p.x * p.y;
+    sumXX += p.x * p.x;
+  }
+
+  const denominator = n * sumXX - sumX * sumX;
+  if (denominator === 0) {
+    // Vertical line? Fallback to constant model
+    const y = points.map(p => p.y);
+    const avg = y.reduce((a, b) => a + b, 0) / y.length;
+    const yhat = points.map(() => avg);
+    return {
+      ...calculateMetrics(points, yhat, 'linear'),
+      a: 0, b: avg
+    };
+  }
+
+  const a = (n * sumXY - sumX * sumY) / denominator;
+  const b = (sumY - a * sumX) / n;
+
+  const yhat = points.map(p => a * p.x + b);
+  
+  const metrics = calculateMetrics(points, yhat, 'linear');
+  
+  // Calculate baseline (naive: average of y) for comparison
+  const y = points.map(p => p.y);
+  const ybar = y.reduce((s, v) => s + v, 0) / n;
+  const baselineYhat = points.map(() => ybar);
+  const baselineMSE = y.reduce((s, v, i) => s + Math.pow(v - baselineYhat[i], 2), 0) / n;
+  const baselineRMSE = Math.sqrt(baselineMSE);
+  
   return {
+    ...metrics,
     a, b,
-    yhat,
-    r2, mse, rmse,
-    baselineMSE, baselineRMSE, improvement,
-    mae, wape, mape, mape_floor5, smape,
-    mase, mase_denom
+    baselineRMSE,
+    improvement: baselineRMSE > 0 ? (baselineRMSE - metrics.rmse) / baselineRMSE : 0
   };
 }
-function makeHorizon(lastDateISO, lastX, a, b, steps=7, interval='day') {
-  const out = [];
-  const base = new Date(lastDateISO);
-  for (let k=1; k<=steps; k++) {
-    const d = new Date(base);
-    if (interval === 'week') d.setDate(d.getDate() + 7*k);
-    else if (interval === 'month') d.setMonth(d.getMonth() + k);
-    else d.setDate(d.getDate() + k);
-    const x = lastX + k;
-    out.push({ date: d.toISOString().slice(0,10), projected: Math.max(0, Math.round(a*x + b)) });
+
+// --------- Confidence Intervals Calculation ---------
+function calculateConfidenceIntervals(points, model, confidenceLevel = 0.95) {
+  const n = points.length;
+  if (n < 3) {
+    // Not enough points for proper confidence intervals
+    return model.yhat.map(prediction => ({
+      lower: Math.max(0, prediction * 0.5),
+      upper: prediction * 1.5
+    }));
   }
-  return out;
+
+  // Calculate residuals
+  const residuals = points.map((p, i) => p.y - model.yhat[i]);
+  
+  // Calculate standard error of residuals
+  const residualMean = residuals.reduce((sum, r) => sum + r, 0) / n;
+  const residualVariance = residuals.reduce((sum, r) => sum + Math.pow(r - residualMean, 2), 0) / (n - 2);
+  const residualStd = Math.sqrt(residualVariance);
+
+  // Z-score for confidence level (simplified)
+  let zScore;
+  switch (confidenceLevel) {
+    case 0.90: zScore = 1.645; break;
+    case 0.95: zScore = 1.96; break;
+    case 0.99: zScore = 2.576; break;
+    default: zScore = 1.96;
+  }
+
+  // For linear models, we can calculate more precise intervals
+  if (model.type === 'linear' && n > 2) {
+    // Calculate mean of x values
+    const xValues = points.map(p => p.x);
+    const xMean = xValues.reduce((sum, x) => sum + x, 0) / n;
+    
+    // Calculate sum of squared differences for x
+    const ssx = xValues.reduce((sum, x) => sum + Math.pow(x - xMean, 2), 0);
+    
+    return model.yhat.map((prediction, i) => {
+      const x = points[i].x;
+      const standardError = residualStd * Math.sqrt(1 + 1/n + Math.pow(x - xMean, 2) / ssx);
+      const margin = zScore * standardError;
+      return {
+        lower: Math.max(0, prediction - margin),
+        upper: prediction + margin
+      };
+    });
+  } else {
+    // For non-linear models, use simpler approach
+    return model.yhat.map(prediction => {
+      const margin = zScore * residualStd;
+      return {
+        lower: Math.max(0, prediction - margin),
+        upper: prediction + margin
+      };
+    });
+  }
+}
+
+// --------- Enhanced Regression with Multiple Models ---------
+function enhancedRegressionFit(points, modelType = 'auto') {
+  const n = points.length;
+  if (n < 2) {
+    return simpleFallbackModel(points);
+  }
+
+  // Try multiple models and select the best one
+  const models = {};
+  
+  // 1. Linear Regression (OLS) - always available
+  try {
+    models.linear = olsFit(points);
+    models.linear.type = 'linear';
+    console.log(`Linear model - RMSE: ${models.linear.rmse}`);
+  } catch (e) {
+    console.error('Linear regression failed:', e.message);
+  }
+  
+  // 2. Moving Average (for very short series)
+  if (n >= 3) {
+    try {
+      models.moving_average = movingAverageFit(points);
+      models.moving_average.type = 'moving_average';
+      console.log(`Moving Average model - RMSE: ${models.moving_average.rmse}`);
+    } catch (e) {
+      console.error('Moving average failed:', e.message);
+    }
+  }
+  
+  // 3. Exponential Smoothing (for short series with trend)
+  if (n >= 4) {
+    try {
+      models.exponential_smoothing = exponentialSmoothingFit(points);
+      models.exponential_smoothing.type = 'exponential_smoothing';
+      console.log(`Exponential Smoothing model - RMSE: ${models.exponential_smoothing.rmse}`);
+    } catch (e) {
+      console.error('Exponential smoothing failed:', e.message);
+    }
+  }
+
+  // Log available models for debugging
+  console.log('Available models:', Object.keys(models));
+
+  // If specific model requested, use it if available
+  if (modelType !== 'auto' && models[modelType]) {
+    const selectedModel = models[modelType];
+    try {
+      selectedModel.confidence_intervals = calculateConfidenceIntervals(points, selectedModel);
+      selectedModel.model_selected = selectedModel.type;
+      console.log(`Using requested model: ${modelType}`);
+      return selectedModel;
+    } catch (e) {
+      console.error(`Confidence intervals failed for ${modelType}:`, e.message);
+      // Fall through to auto-select
+    }
+  }
+
+  // Auto-select best model based on RMSE
+  let bestModel = null;
+  let bestRMSE = Infinity;
+  
+  for (const [name, model] of Object.entries(models)) {
+    if (model && model.rmse !== undefined && model.rmse < bestRMSE) {
+      bestModel = model;
+      bestRMSE = model.rmse;
+    }
+  }
+  
+  // Fallback if no model found
+  if (!bestModel) {
+    bestModel = simpleFallbackModel(points);
+    console.log('Using fallback model');
+  } else {
+    console.log(`Auto-selected model: ${bestModel.type} with RMSE: ${bestRMSE}`);
+  }
+  
+  // Add confidence intervals
+  try {
+    bestModel.confidence_intervals = calculateConfidenceIntervals(points, bestModel);
+  } catch (e) {
+    console.error('Confidence intervals calculation failed:', e.message);
+    // Provide simple confidence intervals as fallback
+    bestModel.confidence_intervals = bestModel.yhat.map(prediction => ({
+      lower: Math.max(0, prediction * 0.7),
+      upper: prediction * 1.3
+    }));
+  }
+  
+  bestModel.model_selected = bestModel.type;
+  
+  return bestModel;
+}
+
+function movingAverageFit(points, window = 3) {
+  const y = points.map(p => p.y);
+  const yhat = [];
+  
+  for (let i = 0; i < points.length; i++) {
+    if (i < window - 1) {
+      yhat.push(y[i]); // Use actual values for beginning
+    } else {
+      const avg = y.slice(i - window + 1, i + 1).reduce((a, b) => a + b, 0) / window;
+      yhat.push(avg);
+    }
+  }
+  
+  return calculateMetrics(points, yhat, 'moving_average');
+}
+
+function exponentialSmoothingFit(points, alpha = 0.3) {
+  const y = points.map(p => p.y);
+  const yhat = [y[0]];
+  
+  for (let i = 1; i < y.length; i++) {
+    const smoothed = alpha * y[i-1] + (1 - alpha) * yhat[i-1];
+    yhat.push(smoothed);
+  }
+  
+  return calculateMetrics(points, yhat, 'exponential_smoothing');
+}
+
+function simpleFallbackModel(points) {
+  const y = points.map(p => p.y);
+  const avg = y.reduce((a, b) => a + b, 0) / y.length;
+  const yhat = points.map(() => avg);
+  
+  return {
+    type: 'constant',
+    yhat,
+    r2: 0,
+    mse: 0,
+    rmse: 0,
+    mae: 0,
+    wape: 0,
+    mape: null,
+    smape: null,
+    confidence_intervals: points.map(() => ({ lower: avg * 0.5, upper: avg * 1.5 }))
+  };
+}
+
+function calculateMetrics(points, yhat, modelType) {
+  const y = points.map(p => p.y);
+  const n = points.length;
+  
+  if (n === 0) {
+    return {
+      type: modelType,
+      yhat: [],
+      r2: null, mse: 0, rmse: 0, mae: 0, wape: 0, 
+      mape: null, smape: null, mase: null
+    };
+  }
+
+  const ybar = y.reduce((s, v) => s + v, 0) / n;
+  
+  // Calculate MSE and RMSE properly
+  let mse = 0;
+  let mae = 0;
+  let ssRes = 0;
+  let ssTot = 0;
+
+  for (let i = 0; i < n; i++) {
+    const error = y[i] - yhat[i];
+    mse += error * error;
+    mae += Math.abs(error);
+    ssRes += error * error;
+    ssTot += Math.pow(y[i] - ybar, 2);
+  }
+
+  mse /= n;
+  mae /= n;
+  const rmse = Math.sqrt(mse);
+  
+  // R² calculation with protection against division by zero
+  const r2 = ssTot > 0 ? (1 - (ssRes / ssTot)) : 0;
+  
+  // WAPE (Weighted Absolute Percentage Error)
+  const sumActual = y.reduce((s, actual) => s + Math.abs(actual), 0);
+  const wape = sumActual > 0 ? mae / (sumActual / n) : 0;
+  
+  // MAPE (Mean Absolute Percentage Error) - only for non-zero values
+  const mapeArr = [];
+  for (let i = 0; i < n; i++) {
+    if (y[i] !== 0) {
+      mapeArr.push(Math.abs((y[i] - yhat[i]) / y[i]));
+    }
+  }
+  const mape = mapeArr.length > 0 ? 
+    (mapeArr.reduce((s, v) => s + v, 0) / mapeArr.length) : null;
+  
+  // sMAPE (Symmetric Mean Absolute Percentage Error)
+  const EPS = 1e-9;
+  let smapeSum = 0;
+  for (let i = 0; i < n; i++) {
+    const denominator = Math.abs(y[i]) + Math.abs(yhat[i]) + EPS;
+    smapeSum += (2 * Math.abs(y[i] - yhat[i])) / denominator;
+  }
+  const smape = smapeSum / n;
+  
+  // MASE (Mean Absolute Scaled Error)
+  let mase = null;
+  if (n >= 2) {
+    let naiveErrors = 0;
+    for (let i = 1; i < n; i++) {
+      naiveErrors += Math.abs(y[i] - y[i-1]);
+    }
+    const meanNaiveError = naiveErrors / (n - 1);
+    mase = meanNaiveError > 0 ? mae / meanNaiveError : null;
+  }
+  
+  // MAPE floor 5% (filter out very small values that inflate MAPE)
+  const mapeFloor5Arr = [];
+  for (let i = 0; i < n; i++) {
+    if (y[i] >= 5) { // Only consider values >= 5
+      mapeFloor5Arr.push(Math.abs((y[i] - yhat[i]) / y[i]));
+    }
+  }
+  const mape_floor5 = mapeFloor5Arr.length > 0 ? 
+    (mapeFloor5Arr.reduce((s, v) => s + v, 0) / mapeFloor5Arr.length) : null;
+
+  // Calculate baseline (naive forecast: average of y) for comparison
+  const baselineYhat = points.map(() => ybar);
+  const baselineMSE = y.reduce((s, v, i) => s + Math.pow(v - baselineYhat[i], 2), 0) / n;
+  const baselineRMSE = Math.sqrt(baselineMSE);
+  const improvement = baselineRMSE > 0 ? (baselineRMSE - rmse) / baselineRMSE : 0;
+
+  return {
+    type: modelType,
+    yhat,
+    r2, mse, rmse, mae, wape, mape, smape, mase, mape_floor5,
+    baselineRMSE,
+    improvement_vs_baseline: improvement
+  };
 }
 
 // ---------------------------- list ----------------------------
@@ -780,7 +1186,84 @@ router.get('/:id/completion/by-interviewer', async (req, res) => {
   }
 });
 
-// ---------------------------- predictive (respondents/day regression + better metrics) ----------------------------
+// ---------------------------- forecasting diagnostics ----------------------------
+router.get('/:id/forecasting-diagnostics', async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+
+    const daily = await prisma.$queryRaw`
+      SELECT DATE("interviewDate") AS day,
+             COUNT(DISTINCT "respondentId")::int AS completed
+      FROM "ResponseFact"
+      WHERE "datasetId" = ${id} AND "interviewDate" IS NOT NULL
+      GROUP BY day
+      ORDER BY day
+    `;
+
+    const series = (daily || []).map(r => ({
+      date: String(r.day),
+      count: Number(r.completed || 0),
+      completed: Number(r.completed || 0)
+    }));
+
+    const diagnostics = analyzeForecastingReadiness(series, {
+      datasetId: id,
+      totalRows: series.length
+    });
+
+    // Add additional dataset-level insights
+    const datasetInfo = await prisma.datasets.findFirst({
+      where: { id },
+      select: { name: true, upload_date: true, data_type: true }
+    });
+
+    res.json({
+      dataset_id: id,
+      dataset_name: datasetInfo?.name,
+      upload_date: datasetInfo?.upload_date,
+      data_type: datasetInfo?.data_type,
+      diagnostics,
+      recommendations: diagnostics.suggestions,
+      readiness_score: calculateReadinessScore(diagnostics)
+    });
+  } catch (e) {
+    console.error('forecasting_diagnostics_failed:', e);
+    res.status(500).json({ message: 'forecasting_diagnostics_failed', detail: e.message });
+  }
+});
+
+function calculateReadinessScore(diagnostics) {
+  let score = 100;
+  
+  // Penalize for insufficient data points
+  if (diagnostics.dataPoints < 10) {
+    score -= (10 - diagnostics.dataPoints) * 5;
+  }
+  
+  // Penalize for short time range
+  if (diagnostics.dayRange < 7) {
+    score -= (7 - diagnostics.dayRange) * 10;
+  }
+  
+  // Penalize for low variance
+  if (diagnostics.variance < 0.1) {
+    score -= 20;
+  }
+  
+  // Penalize for irregular intervals
+  if (!diagnostics.regularIntervals) {
+    score -= 10;
+  }
+  
+  // Penalize for missing data
+  if (diagnostics.missingData) {
+    score -= 15;
+  }
+  
+  return Math.max(0, Math.min(100, score));
+}
+
+// ---------------------------- enhanced predictive regression ----------------------------
 router.get('/:id/predict/regression', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -794,9 +1277,11 @@ router.get('/:id/predict/regression', async (req, res) => {
       GROUP BY day
       ORDER BY day
     `;
+    
     let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: String(r.day) }));
     let synthetic = false;
 
+    // Enhanced synthetic data generation for very short series
     if (pts.length < 2) {
       let total = 0;
       const td = await prisma.$queryRaw`
@@ -804,6 +1289,7 @@ router.get('/:id/predict/regression', async (req, res) => {
         FROM "ResponseFact" WHERE "datasetId" = ${id}
       `;
       total = td?.[0]?.n || 0;
+      
       if (total === 0) {
         const est = await prisma.$queryRaw`
           SELECT COUNT(*)::int AS facts,
@@ -814,168 +1300,199 @@ router.get('/:id/predict/regression', async (req, res) => {
         const qdim  = est?.[0]?.qdim  || 0;
         if (qdim > 0) total = Math.max(0, Math.round(facts / qdim));
       }
+      
+      // Generate more realistic synthetic data with some variance
       const days = Math.min(7, Math.max(3, Math.ceil(Math.sqrt(Math.max(2, total)))));
-      const weights = Array.from({ length: days }, (_, i) => i + 1);
-      const sumW = weights.reduce((s, w) => s + w, 0) || 1;
-      const vals = weights.map(w => Math.round((w / sumW) * total));
-      let diff = total - vals.reduce((s, v) => s + v, 0);
-      let idx = days - 1; while (diff-- > 0) { vals[idx]++; idx = (idx - 1 + days) % days; }
+      const baseRate = total / days;
+      const variance = baseRate * 0.3; // 30% variance
+      
       const today = new Date();
       pts = Array.from({ length: days }, (_, i) => {
-        const d = new Date(today); d.setDate(d.getDate() - (days - i));
-        return { x: i, y: vals[i], date: d.toISOString().slice(0,10) };
+        const d = new Date(today); 
+        d.setDate(d.getDate() - (days - i));
+        // Add some random variation to make data more realistic
+        const variation = (Math.random() - 0.5) * 2 * variance;
+        const dailyValue = Math.max(1, Math.round(baseRate + variation));
+        return { x: i, y: dailyValue, date: d.toISOString().slice(0,10) };
       });
       synthetic = true;
     }
 
+    // Enhanced forecasting diagnostics
+    const diagnostics = analyzeForecastingReadiness(pts.map(p => ({ 
+      date: p.date, 
+      count: p.y,
+      completed: p.y 
+    })));
+
     const uniqueY = new Set(pts.map(p => p.y)).size;
     const n = pts.length;
+    
     if (n < 2 || uniqueY <= 1) {
       return res.json({
-        v: 3,
+        v: 4, // version 4 with enhanced diagnostics
         dataset_id: id,
         synthetic,
+        diagnostics, // Include diagnostics in response
         unit: 'respondents/day',
         metrics: {
           r2: null, mse: 0, rmse: 0,
           baseline_mse: null, baseline_rmse: null, improvement_vs_baseline: null,
           mae: null, wape: null, mape: null, mape_floor5: null, smape: null,
-          oos_rmse: null, oos_mape: null, oos_smape: null, oos_r2: null
+          oos_rmse: null, oos_mape: null, oos_smape: null, oos_r2: null,
+          model_used: 'constant'
         },
         history: pts.map(p => ({ date: p.date, actual: p.y, fitted: p.y })),
-        horizon: []
+        horizon: [],
+        confidence_intervals: []
       });
     }
 
-    const fit = olsFit(pts);
+    // Use enhanced regression that selects best model
+    const fit = enhancedRegressionFit(pts);
+    
+    // Enhanced horizon generation with confidence intervals
+    const horizon = makeHorizonWithCI(
+      pts[pts.length - 1].date, 
+      pts[pts.length - 1].x, 
+      fit, 
+      7, 
+      'day'
+    );
 
-    // holdout (last 20%, min 2)
-let oos = { rmse: null, mape: null, smape: null, r2: null, mase: null };
-if (!synthetic && n >= 5) {
-  const h = Math.max(2, Math.floor(0.2 * n));
-  const train = pts.slice(0, n - h);
-  const test  = pts.slice(n - h);
+    // Enhanced out-of-sample validation for longer series
+    let oos = { rmse: null, mape: null, smape: null, r2: null, mase: null };
+    if (!synthetic && n >= 8) { // Increased minimum for OOS validation
+      const h = Math.max(2, Math.floor(0.25 * n)); // 25% holdout for better validation
+      const train = pts.slice(0, n - h);
+      const test  = pts.slice(n - h);
 
-  const tfit = olsFit(train);
-  const testY    = test.map(p => p.y);
-  const testYhat = test.map((p,i) => Math.max(0, tfit.a * p.x + tfit.b));
+      const tfit = enhancedRegressionFit(train);
+      const testY    = test.map(p => p.y);
+      const testYhat = test.map((p, i) => {
+        const xInTest = train.length + i;
+        if (tfit.type === 'linear') {
+          return Math.max(0, tfit.a * xInTest + tfit.b);
+        } else {
+          // For non-linear models, use the last prediction pattern
+          const lastTrainYhat = tfit.yhat[tfit.yhat.length - 1];
+          return Math.max(0, lastTrainYhat); // Simple fallback
+        }
+      });
 
-  const tmse  = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0) / test.length;
-  const trmse = Math.sqrt(tmse);
+      const tmse  = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0) / test.length;
+      const trmse = Math.sqrt(tmse);
 
-  const tmapeArr = testY.map((v,i)=> v !== 0 ? Math.abs((v - testYhat[i]) / v) : null).filter(v=>v!==null);
-  const tmape    = tmapeArr.length ? (tmapeArr.reduce((s,v)=>s+v,0)/tmapeArr.length) : null;
+      const tmapeArr = testY.map((v, i) => v !== 0 ? Math.abs((v - testYhat[i]) / v) : null)
+                           .filter(v => v !== null);
+      const tmape    = tmapeArr.length ? (tmapeArr.reduce((s, v) => s + v, 0) / tmapeArr.length) : null;
 
-  const EPS = 1e-9;
-  const tsmapeArr= testY.map((v,i)=>{
-    const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
-    return (2 * Math.abs(v - testYhat[i])) / denom;
-  });
-  const tsmape = tsmapeArr.reduce((s,v)=>s+v,0) / tsmapeArr.length;
+      const EPS = 1e-9;
+      const tsmapeArr = testY.map((v, i) => {
+        const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
+        return (2 * Math.abs(v - testYhat[i])) / denom;
+      });
+      const tsmape = tsmapeArr.reduce((s, v) => s + v, 0) / tsmapeArr.length;
 
-  const tybar = testY.reduce((s,v)=>s+v,0) / test.length;
-  const tssRes = testY.reduce((s,v,i)=> s + Math.pow(v - testYhat[i], 2), 0);
-  const tssTot = testY.reduce((s,v)=> s + Math.pow(v - tybar, 2), 0) || 1;
-  const tr2    = 1 - (tssRes / tssTot);
+      const tybar = testY.reduce((s, v) => s + v, 0) / test.length;
+      const tssRes = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0);
+      const tssTot = testY.reduce((s, v) => s + Math.pow(v - tybar), 0) || 1;
+      const tr2    = 1 - (tssRes / tssTot);
 
-  // OOS MASE: scale with TRAIN naive MAE (per Hyndman)
-  let trainNaive = null;
-  if (train.length >= 2) {
-    const denomAbs = train.slice(1).reduce((s,p,i)=> s + Math.abs(p.y - train[i].y), 0) / (train.length - 1);
-    trainNaive = denomAbs > 0 ? denomAbs : null;
-  }
-  const testMAE = testY.reduce((s,v,i)=> s + Math.abs(v - testYhat[i]), 0) / testY.length;
-  const tmase   = (trainNaive && Number.isFinite(testMAE)) ? (testMAE / trainNaive) : null;
+      // OOS MASE
+      let trainNaive = null;
+      if (train.length >= 2) {
+        const denomAbs = train.slice(1).reduce((s, p, i) => s + Math.abs(p.y - train[i].y), 0) / (train.length - 1);
+        trainNaive = denomAbs > 0 ? denomAbs : null;
+      }
+      const testMAE = testY.reduce((s, v, i) => s + Math.abs(v - testYhat[i]), 0) / testY.length;
+      const tmase   = (trainNaive && Number.isFinite(testMAE)) ? (testMAE / trainNaive) : null;
 
-  oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2, mase: tmase };
-}
-    const horizon = makeHorizon(pts[pts.length - 1].date, pts[pts.length - 1].x, fit.a, fit.b, 7, 'day');
+      oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2, mase: tmase };
+    }
 
     res.json({
-      v: 3,
+      v: 4,
       dataset_id: id,
       synthetic,
+      diagnostics, // Include comprehensive diagnostics
       unit: 'respondents/day',
       metrics: {
-        r2: fit.r2, mse: fit.mse, rmse: fit.rmse,
-        baseline_mse: fit.baselineMSE, baseline_rmse: fit.baselineRMSE,
-        improvement_vs_baseline: fit.improvement,
-        mae: fit.mae, wape: fit.wape,
-        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape,
-        mase: fit.mase,                              // <— already present in your snippet
-        oos_rmse: oos.rmse, oos_mape: oos.mape, oos_smape: oos.smape, oos_r2: oos.r2,
-        oos_mase: oos.mase                           // <— add this
+        ...fit,
+        oos_rmse: oos.rmse, 
+        oos_mape: oos.mape, 
+        oos_smape: oos.smape, 
+        oos_r2: oos.r2,
+        oos_mase: oos.mase,
+        model_used: fit.model_selected || fit.type
       },
-      history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
-      horizon
+      history: pts.map((p, i) => ({
+        date: p.date, 
+        actual: p.y, 
+        fitted: Math.max(0, Math.round(fit.yhat[i])),
+        confidence_lower: Math.max(0, Math.round(fit.confidence_intervals[i].lower)),
+        confidence_upper: Math.round(fit.confidence_intervals[i].upper)
+      })),
+      horizon,
+      model_info: {
+        type: fit.model_selected || fit.type,
+        parameters: fit.type === 'linear' ? { slope: fit.a, intercept: fit.b } : {},
+        confidence_level: 0.95
+      }
     });
   } catch (e) {
-    console.error('regression_failed:', e);
-    res.status(500).json({ message: 'regression_failed', detail: e.message });
+    console.error('enhanced_regression_failed:', e);
+    res.status(500).json({ message: 'enhanced_regression_failed', detail: e.message });
   }
 });
 
-// Compatibility alias used by some frontends: /forecast
-router.get('/:id/forecast', async (req, res) => {
-  try {
-    const id = parseId(req.params.id);
-
-    const daily = await prisma.$queryRaw`
-      SELECT DATE("interviewDate") AS day,
-             COUNT(DISTINCT "respondentId")::int AS completed
-      FROM "ResponseFact"
-      WHERE "datasetId" = ${id} AND "interviewDate" IS NOT NULL
-      GROUP BY day
-      ORDER BY day
-    `;
-
-    let pts = (daily || []).map((r, i) => ({
-      x: i,
-      y: Number(r.completed || 0),
-      date: r.day
-    }));
-
-    if (pts.length < 2) {
-      const totalDistinct = await prisma.$queryRaw`
-        SELECT COUNT(DISTINCT "respondentId")::int AS n
-        FROM "ResponseFact" WHERE "datasetId" = ${id}
-      `;
-      const total = totalDistinct?.[0]?.n || 0;
-      const today = new Date();
-      const hist = Array.from({ length: 5 }, (_, i) => {
-        const d = new Date(today); d.setDate(d.getDate() - (5 - i));
-        return { date: d.toISOString().slice(0, 10), value: Math.round(total / 5) };
-      });
-      pts = hist.map((h, i) => ({ x: i, y: h.value, date: h.date }));
+// Enhanced horizon function with confidence intervals
+function makeHorizonWithCI(lastDateISO, lastX, fit, steps = 7, interval = 'day') {
+  const out = [];
+  const base = new Date(lastDateISO);
+  
+  // Get the last few values for trend calculation
+  const lastValues = fit.yhat.slice(-3).filter(v => v != null);
+  const avgRecent = lastValues.length > 0 ? 
+    lastValues.reduce((a, b) => a + b, 0) / lastValues.length : 0;
+  
+  for (let k = 1; k <= steps; k++) {
+    const d = new Date(base);
+    if (interval === 'week') d.setDate(d.getDate() + 7 * k);
+    else if (interval === 'month') d.setMonth(d.getMonth() + k);
+    else d.setDate(d.getDate() + k);
+    
+    let projected, lower, upper;
+    
+    if (fit.type === 'linear' && fit.a !== undefined && fit.b !== undefined) {
+      const x = lastX + k;
+      projected = Math.max(0, fit.a * x + fit.b);
+    } else if (fit.type === 'moving_average') {
+      // For moving average, use the recent average with slight decay
+      projected = Math.max(0, avgRecent * (1 - (k * 0.05))); // 5% decay per step
+    } else if (fit.type === 'exponential_smoothing') {
+      // For exponential smoothing, continue the smoothing trend
+      const lastValue = fit.yhat[fit.yhat.length - 1] || 0;
+      projected = Math.max(0, lastValue * (1 - (k * 0.02))); // 2% decay
+    } else {
+      // Fallback: use the average of recent values
+      projected = Math.max(0, avgRecent);
     }
-
-    const n = pts.length;
-    const sx  = pts.reduce((s,p)=>s+p.x,0);
-    const sy  = pts.reduce((s,p)=>s+p.y,0);
-    const sxx = pts.reduce((s,p)=>s+p.x*p.x,0);
-    const sxy = pts.reduce((s,p)=>s+p.x*p.y,0);
-    const denom = (n*sxx - sx*sx) || 1;
-    const a = (n*sxy - sx*sy)/denom;
-    const b = (sy - a*sx)/n;
-
-    const horizon = (function makeHorizon(lastDateISO, lastX, a, b, steps=7) {
-      const out = [];
-      const base = new Date(lastDateISO);
-      for (let k=1; k<=steps; k++) {
-        const d = new Date(base);
-        d.setDate(d.getDate() + k);
-        const x = lastX + k;
-        out.push({ date: d.toISOString().slice(0,10), projected: Math.max(0, Math.round(a*x + b)) });
-      }
-      return out;
-    })(pts[pts.length-1].date, pts[pts.length-1].x, a, b, 7);
-
-    res.json({ dataset_id: id, metrics: {}, horizon });
-  } catch (e) {
-    console.error('forecast_failed:', e);
-    res.status(500).json({ message: 'forecast_failed', detail: e.message });
+    
+    // Add some variance based on model performance
+    const errorMargin = fit.rmse || 1;
+    lower = Math.max(0, projected - errorMargin * 1.5);
+    upper = Math.max(0, projected + errorMargin * 1.5);
+    
+    out.push({
+      date: d.toISOString().slice(0, 10),
+      projected: Math.round(projected),
+      confidence_lower: Math.round(lower),
+      confidence_upper: Math.round(upper)
+    });
   }
-});
+  return out;
+}
 
 // ===== QUESTION-LEVEL PREDICTIVE =====
 

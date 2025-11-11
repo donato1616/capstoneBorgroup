@@ -12,16 +12,34 @@ function isValidDatasetId(datasetId) {
   return datasetId && datasetId.length > 0 && datasetId !== 'undefined' && datasetId !== 'null';
 }
 
-// Data Validation Component
-function ForecastingDiagnostics({ data, numData, catData, mode }) {
-  // Add std function if not available
-  Math.std = function(arr) {
-    if (!arr || arr.length === 0) return 0;
-    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
-    const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / arr.length;
-    return Math.sqrt(variance);
-  };
+// Enhanced Data Validation Component with Backend Diagnostics
+function ForecastingDiagnostics({ data, numData, catData, mode, datasetId }) {
+  const [diagnostics, setDiagnostics] = useState(null);
+  const [loadingDiagnostics, setLoadingDiagnostics] = useState(false);
 
+  // Fetch diagnostics from backend when data changes
+  useEffect(() => {
+    if (!isValidDatasetId(datasetId)) return;
+
+    const fetchDiagnostics = async () => {
+      try {
+        setLoadingDiagnostics(true);
+        const response = await fetch(`${API_BASE}/api/dataset/${datasetId}/forecasting-diagnostics`);
+        if (response.ok) {
+          const diagnosticsData = await response.json();
+          setDiagnostics(diagnosticsData);
+        }
+      } catch (error) {
+        console.error('Failed to fetch diagnostics:', error);
+      } finally {
+        setLoadingDiagnostics(false);
+      }
+    };
+
+    fetchDiagnostics();
+  }, [datasetId]);
+
+  // Fallback to frontend analysis if backend diagnostics not available
   const analyzeDataQuality = (dataset, type) => {
     if (!dataset?.history?.length) return { status: 'No data', issues: [] };
     
@@ -72,7 +90,6 @@ function ForecastingDiagnostics({ data, numData, catData, mode }) {
       case 'respondents': return data;
       case 'numeric': return numData;
       case 'categorical': 
-        // For categorical, analyze the first series if available
         if (catData?.series && Object.keys(catData.series).length > 0) {
           const firstSeries = Object.values(catData.series)[0];
           return { history: firstSeries.map(item => ({ date: item.date, actual: item.actual })) };
@@ -82,74 +99,100 @@ function ForecastingDiagnostics({ data, numData, catData, mode }) {
     }
   };
 
+  // Use backend diagnostics if available, otherwise fallback to frontend analysis
   const currentData = getDataForMode();
-  const analysis = analyzeDataQuality(currentData, mode);
+  const frontendAnalysis = analyzeDataQuality(currentData, mode);
+  
+  const analysis = diagnostics?.diagnostics || frontendAnalysis;
+  const suggestions = diagnostics?.recommendations || (analysis.issues?.length ? ['Collect more data over a longer time period'] : []);
 
   return (
     <Card className="p-4 bg-blue-50 border-blue-200">
       <div className="text-sm font-medium mb-3">Forecasting Diagnostics</div>
       
-      <div className="space-y-4 text-xs">
-        <div>
-          <div className="font-medium">Current Mode: {mode.toUpperCase()}</div>
-          <div className="mt-2">
-            <div><strong>Status:</strong> <span className={analysis.status === 'Good' ? 'text-green-600' : 'text-red-600'}>{analysis.status}</span></div>
-            <div><strong>Data Points:</strong> {analysis.dataPoints}</div>
-            <div><strong>Date Range:</strong> {analysis.dateRange}</div>
-          </div>
-        </div>
-        
-        {analysis.issues.length > 0 && (
+      {loadingDiagnostics ? (
+        <div className="text-sm text-zinc-500">Loading diagnostics...</div>
+      ) : (
+        <div className="space-y-4 text-xs">
           <div>
-            <div className="font-medium text-amber-700">Issues Detected:</div>
+            <div className="font-medium">Current Mode: {mode.toUpperCase()}</div>
+            <div className="mt-2">
+              <div><strong>Status:</strong> <span className={analysis.status === 'Good' || analysis.status === 'Excellent' ? 'text-green-600' : analysis.status === 'Fair' ? 'text-amber-600' : 'text-red-600'}>{analysis.status}</span></div>
+              <div><strong>Data Points:</strong> {analysis.dataPoints}</div>
+              <div><strong>Date Range:</strong> {analysis.dateRange || analysis.dayRange}</div>
+              {diagnostics?.readiness_score && (
+                <div><strong>Readiness Score:</strong> {diagnostics.readiness_score}/100</div>
+              )}
+            </div>
+          </div>
+          
+          {analysis.issues && analysis.issues.length > 0 && (
+            <div>
+              <div className="font-medium text-amber-700">Issues Detected:</div>
+              <ul className="list-disc list-inside ml-2 mt-1">
+                {analysis.issues.map((issue, index) => (
+                  <li key={index} className="text-amber-700">{typeof issue === 'string' ? issue : issue.message || issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(analysis.status === 'Good' || analysis.status === 'Excellent') && (
+            <div className="text-green-700">
+              ✓ Data quality is sufficient for forecasting
+            </div>
+          )}
+          
+          <div>
+            <div className="font-medium">Data Requirements for Good Forecasting:</div>
             <ul className="list-disc list-inside ml-2 mt-1">
-              {analysis.issues.map((issue, index) => (
-                <li key={index} className="text-amber-700">{issue}</li>
-              ))}
+              <li>Minimum 10+ data points for time series</li>
+              <li>Significant variance in values (not constant)</li>
+              <li>Regular time intervals preferred</li>
+              <li>Limited missing data/outliers</li>
+              <li>At least 7+ days of historical data</li>
             </ul>
           </div>
-        )}
 
-        {analysis.status === 'Good' && (
-          <div className="text-green-700">
-            ✓ Data quality is sufficient for forecasting
-          </div>
-        )}
-        
-        <div>
-          <div className="font-medium">Data Requirements for Good Forecasting:</div>
-          <ul className="list-disc list-inside ml-2 mt-1">
-            <li>Minimum 10+ data points for time series</li>
-            <li>Significant variance in values (not constant)</li>
-            <li>Regular time intervals preferred</li>
-            <li>Limited missing data/outliers</li>
-            <li>At least 7+ days of historical data</li>
-          </ul>
+          {suggestions.length > 0 && (
+            <div>
+              <div className="font-medium text-blue-700">Suggested Actions:</div>
+              <ul className="list-disc list-inside ml-2 mt-1">
+                {suggestions.map((suggestion, index) => (
+                  <li key={index} className="text-blue-700">{suggestion}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Show model information if available */}
+          {data?.model_info && (
+            <div>
+              <div className="font-medium">Model Information:</div>
+              <div className="mt-1">
+                <strong>Model Type:</strong> {data.model_info.type}
+                {data.model_info.parameters && (
+                  <div className="mt-1">
+                    <strong>Parameters:</strong> {JSON.stringify(data.model_info.parameters)}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-
-        {/* Quick Fix Suggestions */}
-        {analysis.issues.length > 0 && (
-          <div>
-            <div className="font-medium text-blue-700">Suggested Actions:</div>
-            <ul className="list-disc list-inside ml-2 mt-1">
-              {analysis.issues.some(i => i.includes('Insufficient data')) && (
-                <li>Collect more data over a longer time period</li>
-              )}
-              {analysis.issues.some(i => i.includes('variance')) && (
-                <li>Check if data aggregation is too coarse - try different intervals</li>
-              )}
-              {analysis.issues.some(i => i.includes('outliers')) && (
-                <li>Review data for anomalies or data entry errors</li>
-              )}
-              {analysis.issues.some(i => i.includes('date gaps')) && (
-                <li>Ensure consistent daily data collection</li>
-              )}
-            </ul>
-          </div>
-        )}
-      </div>
+      )}
     </Card>
   );
+}
+
+// Add std function if not available
+if (!Math.std) {
+  Math.std = function(arr) {
+    if (!arr || arr.length === 0) return 0;
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / arr.length;
+    return Math.sqrt(variance);
+  };
 }
 
 export default function PredictiveInsights() {
@@ -199,12 +242,30 @@ export default function PredictiveInsights() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         
-        // Check if the data is reliable (no extreme values or NaN)
-        if (!data?.metrics?.r2 || !data?.metrics?.rmse) {
-          throw new Error('Invalid data returned, metrics missing or NaN.');
+        // Handle both v3 and v4 response formats
+        if (data.v === 4) {
+          // Enhanced response format with diagnostics
+          setData(data);
+        } else if (data.v === 3) {
+          // Legacy format - convert to new format
+          setData({
+            ...data,
+            v: 4,
+            diagnostics: {
+              status: data.metrics?.r2 > 0.8 ? 'Good' : 'Fair',
+              dataPoints: data.history?.length || 0,
+              issues: []
+            },
+            model_info: {
+              type: 'linear',
+              parameters: {},
+              confidence_level: 0.95
+            }
+          });
+        } else {
+          throw new Error('Invalid data format returned from server');
         }
   
-        setData(data);
       } catch (e) {
         console.error(e);
         setErr(e.message || 'Failed to load dataset');
@@ -322,35 +383,58 @@ export default function PredictiveInsights() {
   const fmt = (v, d = 3) => (v == null ? '—' : Number(v).toFixed(d));
   const unit   = data?.unit || 'respondents/day';
 
-  // Create a single combined series that properly overlaps all data
+  // Enhanced combined series with confidence intervals
   const combinedSeries = useMemo(() => {
     if (mode === 'respondents' && data) {
       const historyData = data.history || [];
       const forecastData = data.horizon || [];
       
-      // Create combined series with all three lines
-      return [
+      // Create combined series with confidence intervals if available
+      const series = [
         { 
           name: 'Actual',  
-          data: historyData.map(x => ({ date: x.date, value: x.actual })) 
+          data: historyData.map(x => ({ 
+            date: x.date, 
+            value: x.actual,
+            confidence_lower: x.confidence_lower,
+            confidence_upper: x.confidence_upper
+          })) 
         },
         { 
           name: 'Fitted',  
-          data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
-        },
-        { 
+          data: historyData.map(x => ({ 
+            date: x.date, 
+            value: x.fitted,
+            confidence_lower: x.confidence_lower,
+            confidence_upper: x.confidence_upper
+          })) 
+        }
+      ];
+
+      // Add forecast with confidence intervals
+      if (forecastData.length > 0) {
+        series.push({ 
           name: 'Forecast', 
           data: [
             // Include the last fitted point to connect to forecast
             ...(historyData.length > 0 ? [{
               date: historyData[historyData.length - 1].date,
-              value: historyData[historyData.length - 1].fitted
+              value: historyData[historyData.length - 1].fitted,
+              confidence_lower: historyData[historyData.length - 1].confidence_lower,
+              confidence_upper: historyData[historyData.length - 1].confidence_upper
             }] : []),
-            // Include all forecast points
-            ...forecastData.map(x => ({ date: x.date, value: x.projected }))
+            // Include all forecast points with confidence intervals
+            ...forecastData.map(x => ({ 
+              date: x.date, 
+              value: x.projected,
+              confidence_lower: x.confidence_lower,
+              confidence_upper: x.confidence_upper
+            }))
           ]
-        }
-      ];
+        });
+      }
+      
+      return series;
     }
     return [];
   }, [data, mode]);
@@ -385,7 +469,7 @@ export default function PredictiveInsights() {
     ];
   }, [numData]);
 
-  // categorical question series (multiple labels) - IMPROVED VERSION
+  // categorical question series (multiple labels)
   const catSeries = useMemo(() => {
     if (!catData?.labels?.length || !catData?.series) return [];
     
@@ -607,6 +691,38 @@ export default function PredictiveInsights() {
             </div>
             <div className="text-xs text-zinc-400 mt-1">Filtered for values ≥5 • Lower is better</div>
           </Card>
+
+          {/* Enhanced metrics for v4 response */}
+          {data?.metrics?.oos_rmse != null && (
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">OOS RMSE</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', data.metrics.oos_rmse)}`}>
+                {fmt(data.metrics.oos_rmse)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Out-of-sample error • Lower is better</div>
+            </Card>
+          )}
+
+          {data?.metrics?.oos_r2 != null && (
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">OOS R²</div>
+              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', data.metrics.oos_r2)}`}>
+                {fmt(data.metrics.oos_r2)}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Out-of-sample fit • Target: ≥0.8</div>
+            </Card>
+          )}
+
+          {/* Model information */}
+          {data?.model_info && (
+            <Card className="p-4">
+              <div className="text-xs text-zinc-500">Model Used</div>
+              <div className="text-2xl font-semibold mt-1 text-blue-600 capitalize">
+                {data.model_info.type?.replace('_', ' ') || 'Linear'}
+              </div>
+              <div className="text-xs text-zinc-400 mt-1">Selected by enhanced algorithm</div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -625,33 +741,46 @@ export default function PredictiveInsights() {
                     series={combinedSeries} 
                     yLabel={unit}
                     xLabel="Date"
+                    showConfidence={true}
                   />
                   <div className="mt-3 text-xs text-zinc-500 grid grid-cols-3 gap-2">
                     <div><span className="inline-block w-3 h-3 bg-[#0ea5e9] mr-1"></span> Actual: Historical data points</div>
                     <div><span className="inline-block w-3 h-3 bg-[#6366f1] mr-1"></span> Fitted: Model predictions for historical period</div>
                     <div><span className="inline-block w-3 h-3 bg-[#f59e0b] mr-1 border border-amber-600"></span> Forecast: 7-day future projections</div>
                   </div>
+                  {data?.history?.[0]?.confidence_lower != null && (
+                    <div className="mt-2 text-xs text-zinc-500">
+                      * Shaded areas show 95% confidence intervals
+                    </div>
+                  )}
                 </>
               )
             }
           </Card>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Card className="p-4">
-              <div className="text-xs text-zinc-500">OOS RMSE ({unit})</div>
-              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', data?.metrics?.oos_rmse)}`}>
-                {fmt(data?.metrics?.oos_rmse)}
-              </div>
-              <div className="text-xs text-zinc-400 mt-1">Out-of-sample error • Lower is better</div>
-            </Card>
-            <Card className="p-4">
-              <div className="text-xs text-zinc-500">OOS R²</div>
-              <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', data?.metrics?.oos_r2)}`}>
-                {fmt(data?.metrics?.oos_r2)}
-              </div>
-              <div className="text-xs text-zinc-400 mt-1">Out-of-sample fit • Target: ≥0.8</div>
-            </Card>
-          </div>
+          {/* Enhanced OOS metrics section */}
+          {(data?.metrics?.oos_rmse != null || data?.metrics?.oos_r2 != null) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {data.metrics.oos_rmse != null && (
+                <Card className="p-4">
+                  <div className="text-xs text-zinc-500">OOS RMSE ({unit})</div>
+                  <div className={`text-2xl font-semibold mt-1 ${getMetricColor('rmse', data.metrics.oos_rmse)}`}>
+                    {fmt(data.metrics.oos_rmse)}
+                  </div>
+                  <div className="text-xs text-zinc-400 mt-1">Out-of-sample error • Lower is better</div>
+                </Card>
+              )}
+              {data.metrics.oos_r2 != null && (
+                <Card className="p-4">
+                  <div className="text-xs text-zinc-500">OOS R²</div>
+                  <div className={`text-2xl font-semibold mt-1 ${getMetricColor('r2', data.metrics.oos_r2)}`}>
+                    {fmt(data.metrics.oos_r2)}
+                  </div>
+                  <div className="text-xs text-zinc-400 mt-1">Out-of-sample fit • Target: ≥0.8</div>
+                </Card>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -755,13 +884,14 @@ export default function PredictiveInsights() {
         </>
       )}
 
-      {/* Data Validation Diagnostics - Always show when we have data */}
+      {/* Enhanced Data Validation Diagnostics */}
       {(data || numData || catData) && (
         <ForecastingDiagnostics 
           data={data} 
           numData={numData} 
           catData={catData} 
-          mode={mode} 
+          mode={mode}
+          datasetId={datasetId}
         />
       )}
     </div>
