@@ -15,6 +15,38 @@ export default function FieldMgmt() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: "" });
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortField, setSortField] = useState("name");
+  const [sortOrder, setSortOrder] = useState("asc");
+
+// --- Derived data ---
+const filteredInterviewers = useMemo(() => {
+  return interviewers
+    .filter((i) =>
+      i.name?.toLowerCase().includes(searchTerm.toLowerCase().trim())
+    )
+    .sort((a, b) => {
+      let valA = sortField === "name" ? a.name : a.completedCount;
+      let valB = sortField === "name" ? b.name : b.completedCount;
+
+      if (typeof valA === "string") valA = valA.toLowerCase();
+      if (typeof valB === "string") valB = valB.toLowerCase();
+
+      if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+}, [interviewers, searchTerm, sortField, sortOrder]);
+
+const toggleSort = (field) => {
+  if (sortField === field) {
+    setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+  } else {
+    setSortField(field);
+    setSortOrder("asc");
+  }
+};
+
   // Fetch interviewers
   useEffect(() => {
     (async () => {
@@ -116,46 +148,72 @@ export default function FieldMgmt() {
       </div>
 
       <Card>
-        <div className="p-4 border-b flex items-center justify-between">
-          <div className="text-xs text-zinc-500">{countText}</div>
-        </div>
+        <div className="p-4 border-b flex items-center justify-between gap-3">
+  <div className="text-xs text-zinc-500">{countText}</div>
 
-        <div className="p-4">
-          {loading && <div className="text-sm text-zinc-500">Loading…</div>}
-          {error && <div className="text-sm text-rose-600">{error}</div>}
+  <input
+    type="text"
+    value={searchTerm}
+    onChange={(e) => setSearchTerm(e.target.value)}
+    placeholder="Search interviewer..."
+    className="input w-48 rounded-lg border px-2 py-1 text-sm shadow-sm"
+  />
+</div>
 
-          {!loading && !error && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-zinc-500">
-                  <tr className="border-b border-zinc-200">
-                    <th className="p-3">Name</th>
-                    <th className="p-3">Completed Interviews</th>
-                    <th className="p-3">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {interviewers.map((i) => (
-                    <tr key={i.id} className="border-b last:border-0">
-                      <td className="p-3">{i.name?.toUpperCase()}</td>
-                      <td className="p-3">{i.completedCount}</td>
-                      <td className="p-3">
-                        <div className="flex gap-2">
-                          <button className="btn btn-ghost" onClick={() => openEdit(i)}>
-                            Edit
-                          </button>
-                          <button className="btn btn-ghost" onClick={() => toggleStatus(i)}>
-                            Suspend
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+<div className="p-4">
+  {loading && <div className="text-sm text-zinc-500">Loading…</div>}
+  {error && <div className="text-sm text-rose-600">{error}</div>}
+
+  {!loading && !error && (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-left text-zinc-500">
+          <tr className="border-b border-zinc-200 select-none">
+            <th
+              className="p-3 cursor-pointer"
+              onClick={() => toggleSort("name")}
+            >
+              Name {sortField === "name" && (sortOrder === "asc" ? "▲" : "▼")}
+            </th>
+            <th
+              className="p-3 cursor-pointer"
+              onClick={() => toggleSort("completedCount")}
+            >
+              Completed Interviews{" "}
+              {sortField === "completedCount" && (sortOrder === "asc" ? "▲" : "▼")}
+            </th>
+            <th className="p-3">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredInterviewers.map((i) => (
+            <tr key={i.id} className="border-b last:border-0">
+              <td className="p-3">{i.name?.toUpperCase()}</td>
+              <td className="p-3">{i.completedCount}</td>
+              <td className="p-3">
+                <div className="flex gap-2">
+                  <button className="btn btn-ghost" onClick={() => openEdit(i)}>
+                    Edit
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => toggleStatus(i)}>
+                    Suspend
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {filteredInterviewers.length === 0 && (
+        <div className="text-sm text-zinc-400 text-center py-4">
+          No interviewers found.
         </div>
+      )}
+    </div>
+  )}
+</div>
+
       </Card>
 
       {/* Add modal */}
