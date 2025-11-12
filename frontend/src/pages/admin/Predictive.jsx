@@ -12,6 +12,19 @@ function isValidDatasetId(datasetId) {
   return datasetId && datasetId.length > 0 && datasetId !== 'undefined' && datasetId !== 'null';
 }
 
+// --- NEW: normalize backend metric keys (snake vs camel) ---
+function normalizeMetrics(m) {
+  if (!m) return m;
+  const out = { ...m };
+  // common mappings
+  if (out.baselineRMSE != null && out.baseline_rmse == null) out.baseline_rmse = out.baselineRMSE;
+  if (out.improvement != null && out.improvement_vs_baseline == null) out.improvement_vs_baseline = out.improvement;
+  // OOS mappings
+  if (out.oosBaselineRMSE != null && out.oos_baseline_rmse == null) out.oos_baseline_rmse = out.oosBaselineRMSE;
+  if (out.oosImprovement != null && out.oos_improvement_vs_baseline == null) out.oos_improvement_vs_baseline = out.oosImprovement;
+  return out;
+}
+
 // Enhanced Data Validation Component with Backend Diagnostics
 function ForecastingDiagnostics({ data, numData, catData, mode, datasetId }) {
   const [diagnostics, setDiagnostics] = useState(null);
@@ -240,28 +253,12 @@ export default function PredictiveInsights() {
         setData(null);
         const res = await fetch(`${API_BASE}/api/dataset/${datasetId}/predict/regression`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const payload = await res.json();
         
-        // Handle both v3 and v4 response formats
-        if (data.v === 4) {
-          // Enhanced response format with diagnostics
-          setData(data);
-        } else if (data.v === 3) {
-          // Legacy format - convert to new format
-          setData({
-            ...data,
-            v: 4,
-            diagnostics: {
-              status: data.metrics?.r2 > 0.8 ? 'Good' : 'Fair',
-              dataPoints: data.history?.length || 0,
-              issues: []
-            },
-            model_info: {
-              type: 'linear',
-              parameters: {},
-              confidence_level: 0.95
-            }
-          });
+        // Normalize metrics & tolerate v3/v4
+        if (payload.v === 4 || payload.v === 3) {
+          const metrics = normalizeMetrics(payload.metrics);
+          setData({ ...payload, metrics });
         } else {
           throw new Error('Invalid data format returned from server');
         }
@@ -328,13 +325,16 @@ export default function PredictiveInsights() {
         url.searchParams.set('interval', numInterval);
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const numData = await res.json();
-  
-        // Validate if data is structured correctly and contains the required fields
-        if (!numData?.history?.length || !numData?.horizon?.length) {
+        const payload = await res.json();
+
+        const metrics = normalizeMetrics(payload.metrics);
+        const normalized = { ...payload, metrics };
+
+        // Validate
+        if (!normalized?.history?.length && !normalized?.horizon?.length) {
           throw new Error('No valid forecast data returned.');
         }
-        setNumData(numData);
+        setNumData(normalized);
       } catch (e) {
         console.error(e);
         setNumErr(e.message || 'Failed to load numeric forecast');
@@ -363,13 +363,10 @@ export default function PredictiveInsights() {
         url.searchParams.set('as_share', catAsShare ? '1' : '0');
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const catData = await res.json();
-  
-        // Validate if the data has labels and series to render
-        if (!catData?.labels?.length || !catData?.series) {
-          throw new Error('No valid categorical data returned.');
-        }
-        setCatData(catData);
+        const payload = await res.json();
+
+        // no top-level metrics for multi-series; nothing to normalize here
+        setCatData(payload);
       } catch (e) {
         console.error(e);
         setCatErr(e.message || 'Failed to load categorical forecast');
@@ -389,7 +386,6 @@ export default function PredictiveInsights() {
       const historyData = data.history || [];
       const forecastData = data.horizon || [];
       
-      // Create combined series with confidence intervals if available
       const series = [
         { 
           name: 'Actual',  
@@ -411,19 +407,16 @@ export default function PredictiveInsights() {
         }
       ];
 
-      // Add forecast with confidence intervals
       if (forecastData.length > 0) {
         series.push({ 
           name: 'Forecast', 
           data: [
-            // Include the last fitted point to connect to forecast
             ...(historyData.length > 0 ? [{
               date: historyData[historyData.length - 1].date,
               value: historyData[historyData.length - 1].fitted,
               confidence_lower: historyData[historyData.length - 1].confidence_lower,
               confidence_upper: historyData[historyData.length - 1].confidence_upper
             }] : []),
-            // Include all forecast points with confidence intervals
             ...forecastData.map(x => ({ 
               date: x.date, 
               value: x.projected,
@@ -458,7 +451,6 @@ export default function PredictiveInsights() {
       { 
         name: 'Forecast', 
         data: [
-          // Connect forecast to the last fitted point
           ...(historyData.length > 0 ? [{
             date: historyData[historyData.length - 1].date,
             value: historyData[historyData.length - 1].fitted
@@ -474,15 +466,12 @@ export default function PredictiveInsights() {
     if (!catData?.labels?.length || !catData?.series) return [];
     
     const out = [];
-    
-    // Use the actual category names from the data
     const categories = catData.labels.slice(0, catTopK);
     
-    categories.forEach((label, index) => {
+    categories.forEach((label) => {
       const historyData = catData.series?.[label] || [];
       const forecastData = catData.horizon?.[label] || [];
       
-      // Each category gets its own color, with Actual/Fitted/Forecast variations
       out.push({ 
         name: `${label} - Actual`,  
         data: historyData.map(x => ({ date: x.date, value: x.actual })) 
@@ -497,7 +486,6 @@ export default function PredictiveInsights() {
         out.push({ 
           name: `${label} - Forecast`, 
           data: [
-            // Connect forecast to the last fitted point
             ...(historyData.length > 0 ? [{
               date: historyData[historyData.length - 1].date,
               value: historyData[historyData.length - 1].fitted
@@ -516,7 +504,6 @@ export default function PredictiveInsights() {
   // Helper function to determine color based on metric performance
   const getMetricColor = (metric, value, baseline = null) => {
     if (value == null) return 'text-zinc-400';
-    
     switch (metric) {
       case 'r2':
         return value >= 0.8 ? 'text-green-600' : value >= 0.6 ? 'text-amber-600' : 'text-red-600';
@@ -524,7 +511,6 @@ export default function PredictiveInsights() {
       case 'mse':
       case 'mape':
       case 'smape':
-        // For error metrics, lower is better
         if (baseline && value < baseline) return 'text-green-600';
         return value < 0.1 ? 'text-green-600' : value < 0.3 ? 'text-amber-600' : 'text-red-600';
       case 'improvement':
@@ -541,7 +527,6 @@ export default function PredictiveInsights() {
     <div className="space-y-4">
       <DatasetSelector onSelectDataset={setDatasetId} />
 
-      {/* Show message when no dataset is selected */}
       {!isValidDatasetId(datasetId) && (
         <Card className="p-4 bg-amber-50 border-amber-200">
           <div className="text-amber-800">
@@ -550,7 +535,6 @@ export default function PredictiveInsights() {
         </Card>
       )}
 
-      {/* Mode switch - only show when dataset is selected */}
       {isValidDatasetId(datasetId) && (
         <Card className="p-4">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -563,7 +547,6 @@ export default function PredictiveInsights() {
               <option value="categorical">Categorical/Text Question forecast</option>
             </select>
 
-            {/* Numeric controls */}
             {mode === 'numeric' && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="ml-2 text-sm">Question:</span>
@@ -586,7 +569,6 @@ export default function PredictiveInsights() {
               </div>
             )}
 
-            {/* Categorical controls */}
             {mode === 'categorical' && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="ml-2 text-sm">Question:</span>
@@ -611,6 +593,15 @@ export default function PredictiveInsights() {
                 </label>
               </div>
             )}
+          </div>
+        </Card>
+      )}
+
+      {/* Synthetic banner */}
+      {mode === 'respondents' && data?.synthetic && (
+        <Card className="p-4 bg-amber-50 border-amber-200">
+          <div className="text-xs text-amber-800">
+            Heads up: Using synthetic seed data due to very short history. Treat model metrics as indicative only.
           </div>
         </Card>
       )}
@@ -692,7 +683,6 @@ export default function PredictiveInsights() {
             <div className="text-xs text-zinc-400 mt-1">Filtered for values ≥5 • Lower is better</div>
           </Card>
 
-          {/* Enhanced metrics for v4 response */}
           {data?.metrics?.oos_rmse != null && (
             <Card className="p-4">
               <div className="text-xs text-zinc-500">OOS RMSE</div>
@@ -710,17 +700,6 @@ export default function PredictiveInsights() {
                 {fmt(data.metrics.oos_r2)}
               </div>
               <div className="text-xs text-zinc-400 mt-1">Out-of-sample fit • Target: ≥0.8</div>
-            </Card>
-          )}
-
-          {/* Model information */}
-          {data?.model_info && (
-            <Card className="p-4">
-              <div className="text-xs text-zinc-500">Model Used</div>
-              <div className="text-2xl font-semibold mt-1 text-blue-600 capitalize">
-                {data.model_info.type?.replace('_', ' ') || 'Linear'}
-              </div>
-              <div className="text-xs text-zinc-400 mt-1">Selected by enhanced algorithm</div>
             </Card>
           )}
         </div>
@@ -758,7 +737,6 @@ export default function PredictiveInsights() {
             }
           </Card>
 
-          {/* Enhanced OOS metrics section */}
           {(data?.metrics?.oos_rmse != null || data?.metrics?.oos_r2 != null) && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {data.metrics.oos_rmse != null && (

@@ -552,21 +552,20 @@ function exponentialSmoothingFit(points, alpha = 0.3) {
 
 function simpleFallbackModel(points) {
   const y = points.map(p => p.y);
+  if (y.length === 0) {
+    return {
+      type: 'constant',
+      yhat: [],
+      r2: null, mse: null, rmse: null, mae: null, wape: null,
+      mape: null, smape: null, mase: null, mape_floor5: null,
+      baselineRMSE: null, improvement_vs_baseline: null
+    };
+  }
   const avg = y.reduce((a, b) => a + b, 0) / y.length;
   const yhat = points.map(() => avg);
-  
-  return {
-    type: 'constant',
-    yhat,
-    r2: 0,
-    mse: 0,
-    rmse: 0,
-    mae: 0,
-    wape: 0,
-    mape: null,
-    smape: null,
-    confidence_intervals: points.map(() => ({ lower: avg * 0.5, upper: avg * 1.5 }))
-  };
+  // compute proper metrics for the constant mean model
+  const metrics = calculateMetrics(points, yhat, 'constant');
+  return { ...metrics, type: 'constant' };
 }
 
 function calculateMetrics(points, yhat, modelType) {
@@ -1361,85 +1360,105 @@ router.get('/:id/predict/regression', async (req, res) => {
     );
 
     // Enhanced out-of-sample validation for longer series
-    let oos = { rmse: null, mape: null, smape: null, r2: null, mase: null };
-    if (!synthetic && n >= 8) { // Increased minimum for OOS validation
-      const h = Math.max(2, Math.floor(0.25 * n)); // 25% holdout for better validation
-      const train = pts.slice(0, n - h);
-      const test  = pts.slice(n - h);
+    // Enhanced out-of-sample validation for longer series
+let oos = { rmse: null, mape: null, smape: null, r2: null, mase: null, baseline_rmse: null, improvement_vs_baseline: null };
+if (!synthetic && n >= 8) { // Increased minimum for OOS validation (fixed emoji)
+  const h = Math.max(2, Math.floor(0.25 * n)); // 25% holdout
+  const train = pts.slice(0, n - h);
+  const test  = pts.slice(n - h);
 
-      const tfit = enhancedRegressionFit(train);
-      const testY    = test.map(p => p.y);
-      const testYhat = test.map((p, i) => {
-        const xInTest = train.length + i;
-        if (tfit.type === 'linear') {
-          return Math.max(0, tfit.a * xInTest + tfit.b);
-        } else {
-          // For non-linear models, use the last prediction pattern
-          const lastTrainYhat = tfit.yhat[tfit.yhat.length - 1];
-          return Math.max(0, lastTrainYhat); // Simple fallback
-        }
-      });
+  const tfit = enhancedRegressionFit(train);
 
-      const tmse  = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0) / test.length;
-      const trmse = Math.sqrt(tmse);
-
-      const tmapeArr = testY.map((v, i) => v !== 0 ? Math.abs((v - testYhat[i]) / v) : null)
-                           .filter(v => v !== null);
-      const tmape    = tmapeArr.length ? (tmapeArr.reduce((s, v) => s + v, 0) / tmapeArr.length) : null;
-
-      const EPS = 1e-9;
-      const tsmapeArr = testY.map((v, i) => {
-        const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
-        return (2 * Math.abs(v - testYhat[i])) / denom;
-      });
-      const tsmape = tsmapeArr.reduce((s, v) => s + v, 0) / tsmapeArr.length;
-
-      const tybar = testY.reduce((s, v) => s + v, 0) / test.length;
-      const tssRes = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0);
-      const tssTot = testY.reduce((s, v) => s + Math.pow(v - tybar), 0) || 1;
-      const tr2    = 1 - (tssRes / tssTot);
-
-      // OOS MASE
-      let trainNaive = null;
-      if (train.length >= 2) {
-        const denomAbs = train.slice(1).reduce((s, p, i) => s + Math.abs(p.y - train[i].y), 0) / (train.length - 1);
-        trainNaive = denomAbs > 0 ? denomAbs : null;
-      }
-      const testMAE = testY.reduce((s, v, i) => s + Math.abs(v - testYhat[i]), 0) / testY.length;
-      const tmase   = (trainNaive && Number.isFinite(testMAE)) ? (testMAE / trainNaive) : null;
-
-      oos = { rmse: trmse, mape: tmape, smape: tsmape, r2: tr2, mase: tmase };
+  // model preds for test
+  const testY    = test.map(p => p.y);
+  const testYhat = test.map((p, i) => {
+    const xInTest = train.length + i;
+    if (tfit.type === 'linear' && tfit.a != null && tfit.b != null) {
+      return Math.max(0, tfit.a * xInTest + tfit.b);
+    } else {
+      const lastTrainYhat = tfit.yhat[tfit.yhat.length - 1] ?? train[train.length - 1].y;
+      return Math.max(0, lastTrainYhat);
     }
+  });
 
-    res.json({
-      v: 4,
-      dataset_id: id,
-      synthetic,
-      diagnostics, // Include comprehensive diagnostics
-      unit: 'respondents/day',
-      metrics: {
-        ...fit,
-        oos_rmse: oos.rmse, 
-        oos_mape: oos.mape, 
-        oos_smape: oos.smape, 
-        oos_r2: oos.r2,
-        oos_mase: oos.mase,
-        model_used: fit.model_selected || fit.type
-      },
-      history: pts.map((p, i) => ({
-        date: p.date, 
-        actual: p.y, 
-        fitted: Math.max(0, Math.round(fit.yhat[i])),
-        confidence_lower: Math.max(0, Math.round(fit.confidence_intervals[i].lower)),
-        confidence_upper: Math.round(fit.confidence_intervals[i].upper)
-      })),
-      horizon,
-      model_info: {
-        type: fit.model_selected || fit.type,
-        parameters: fit.type === 'linear' ? { slope: fit.a, intercept: fit.b } : {},
-        confidence_level: 0.95
-      }
-    });
+  // naive baseline (random-walk / persistence): y_hat_t = y_{t-1}
+  const naiveYhat = test.map((_, i) => (i === 0 ? train[train.length - 1].y : test[i - 1].y));
+
+  const tmse  = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0) / test.length;
+  const trmse = Math.sqrt(tmse);
+
+  const nbmse = testY.reduce((s, v, i) => s + Math.pow(v - naiveYhat[i], 2), 0) / test.length;
+  const nbrmse = Math.sqrt(nbmse);
+
+  const tmapeArr = testY.map((v, i) => v !== 0 ? Math.abs((v - testYhat[i]) / v) : null).filter(v => v !== null);
+  const tmape    = tmapeArr.length ? (tmapeArr.reduce((s, v) => s + v, 0) / tmapeArr.length) : null;
+
+  const EPS = 1e-9;
+  const tsmapeArr = testY.map((v, i) => {
+    const denom = Math.abs(v) + Math.abs(testYhat[i]) + EPS;
+    return (2 * Math.abs(v - testYhat[i])) / denom;
+  });
+  const tsmape = tsmapeArr.reduce((s, v) => s + v, 0) / tsmapeArr.length;
+
+  const tybar = testY.reduce((s, v) => s + v, 0) / test.length;
+  const tssRes = testY.reduce((s, v, i) => s + Math.pow(v - testYhat[i], 2), 0);
+  const tssTot = testY.reduce((s, v) => s + Math.pow(v - tybar, 2), 0); // << fixed exponent
+  const tr2    = tssTot > 0 ? (1 - (tssRes / tssTot)) : 0;
+
+  // OOS MASE
+  let trainNaive = null;
+  if (train.length >= 2) {
+    const denomAbs = train.slice(1).reduce((s, p, i) => s + Math.abs(p.y - train[i].y), 0) / (train.length - 1);
+    trainNaive = denomAbs > 0 ? denomAbs : null;
+  }
+  const testMAE = testY.reduce((s, v, i) => s + Math.abs(v - testYhat[i]), 0) / testY.length;
+  const tmase   = (trainNaive && Number.isFinite(testMAE)) ? (testMAE / trainNaive) : null;
+
+  oos = {
+    rmse: trmse,
+    mape: tmape,
+    smape: tsmape,
+    r2: tr2,
+    mase: tmase,
+    baseline_rmse: nbrmse,
+    improvement_vs_baseline: (nbrmse > 0) ? (nbrmse - trmse) / nbrmse : null
+  };
+}
+
+res.json({
+  v: 4,
+  dataset_id: id,
+  synthetic,
+  diagnostics,
+  unit: 'respondents/day',
+  metrics: {
+    r2: fit.r2, mse: fit.mse, rmse: fit.rmse,
+    mae: fit.mae, wape: fit.wape, mape: fit.mape, smape: fit.smape, mase: fit.mase, mape_floor5: fit.mape_floor5,
+    baseline_rmse: fit.baselineRMSE,
+    improvement_vs_baseline: (fit.improvement_vs_baseline != null) ? fit.improvement_vs_baseline : fit.improvement,
+    oos_rmse: oos.rmse, 
+    oos_mape: oos.mape, 
+    oos_smape: oos.smape, 
+    oos_r2: oos.r2,
+    oos_mase: oos.mase,
+    oos_baseline_rmse: oos.baseline_rmse,
+    oos_improvement_vs_baseline: oos.improvement_vs_baseline,
+    model_used: fit.model_selected || fit.type
+  },
+  history: pts.map((p, i) => ({
+    date: p.date, 
+    actual: p.y, 
+    fitted: Math.max(0, Math.round(fit.yhat[i])),
+    confidence_lower: Math.max(0, Math.round(fit.confidence_intervals[i].lower)),
+    confidence_upper: Math.round(fit.confidence_intervals[i].upper)
+  })),
+  horizon,
+  model_info: {
+    type: fit.model_selected || fit.type,
+    parameters: fit.type === 'linear' ? { slope: fit.a, intercept: fit.b } : {},
+    confidence_level: 0.95
+  }
+});
   } catch (e) {
     console.error('enhanced_regression_failed:', e);
     res.status(500).json({ message: 'enhanced_regression_failed', detail: e.message });
@@ -1602,25 +1621,23 @@ router.get('/:id/predict/question/numeric', async (req, res) => {
     if (pts.length < 2 || new Set(pts.map(p=>p.y)).size <= 1) {
       return res.json({
         dataset_id: id, question: q, agg, interval, synthetic: false,
-        metrics: { r2:null, rmse:0, mape:null, smape:null, mape_floor5:null, baseline_rmse:null, improvement_vs_baseline:null },
+        metrics: { r2:null, rmse:0, mape:null, smape:null, mape_floor5:null, baseline_rmse:null, improvement_vs_baseline:null, mase:null },
         history: pts.map(p => ({ date: p.date, actual: p.y, fitted: p.y })),
         horizon: []
       });
     }
 
-    const fit = olsFit(pts);
-    const horizon = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, fit.a, fit.b, 7, interval);
+    // use enhanced model selector (linear / moving average / exponential smoothing)
+    const fit = enhancedRegressionFit(pts);
+    const horizon = makeHorizon(pts[pts.length-1].date, pts[pts.length-1].x, fit.a ?? 0, fit.b ?? (fit.yhat?.[fit.yhat.length-1] ?? 0), 7, interval);
 
     res.json({
-      dataset_id: id, question: q, agg, interval,
-      synthetic: false,
+      dataset_id: id, question: q, agg, interval, synthetic: false,
       metrics: {
         r2: fit.r2, rmse: fit.rmse, mse: fit.mse,
         baseline_rmse: fit.baselineRMSE,
-        improvement_vs_baseline: fit.improvement,
-        mae: fit.mae, wape: fit.wape,               // (if you keep them)
-        mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape,
-        mase: fit.mase                               // <— add this
+        improvement_vs_baseline: (fit.improvement_vs_baseline != null) ? fit.improvement_vs_baseline : fit.improvement,
+        mae: fit.mae, wape: fit.wape, mape: fit.mape, mape_floor5: fit.mape_floor5, smape: fit.smape, mase: fit.mase
       },
       history: pts.map((p,i)=>({ date: p.date, actual: p.y, fitted: Math.max(0, Math.round(fit.yhat[i])) })),
       horizon
