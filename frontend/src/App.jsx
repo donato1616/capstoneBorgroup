@@ -17,7 +17,7 @@ import Login from "./pages/Login.jsx";
 import Overview from "./pages/admin/Overview.jsx";
 import Completion from "./pages/admin/Completion.jsx";
 import Predictive from "./pages/admin/Predictive.jsx";
-import Prescriptive from "./pages/admin/Prescriptive.jsx"; // <-- NEW
+import Prescriptive from "./pages/admin/Prescriptive.jsx";
 import FieldMgmt from "./pages/admin/FieldMgmt.jsx";
 import AuditTrail from "./pages/admin/AuditTrail.jsx";
 import AdminProfile from "./pages/admin/AdminProfile.jsx";
@@ -42,6 +42,9 @@ import DatasetSelector from "./components/DatasetSelector.jsx";
 
 import { Breadcrumb } from "./components/ui";
 import clsx from "clsx";
+
+// PDF Export functionality
+import { exportDashboardToPDF } from "./components/pdfExport";
 
 function HandlerRoutes() {
   const location = useLocation();
@@ -71,9 +74,8 @@ export default function App() {
 function MainApp() {
   // ====== Persistent tab states ======
   const [active, setActive] = useState("overview"); 
-const [activeField, setActiveField] = useState("home");  // field tabs
+  const [activeField, setActiveField] = useState("home");  // field tabs
   const [activeAnalyst, setActiveAnalyst] = useState("a_home"); // analyst tabs
-
 
   // ====== User ======
   const [user, setUser] = useState(() => {
@@ -119,6 +121,98 @@ const [activeField, setActiveField] = useState("home");  // field tabs
 
   // ====== Dataset selection (Admin Overview) ======
   const [selectedDataset, setSelectedDataset] = useState("");
+
+  // ====== Export functionality ======
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const currentActiveTab = getCurrentActiveTab(user.role);
+      const exportData = {
+        metrics: getCurrentMetrics(user.role, currentActiveTab),
+        timestamp: new Date().toISOString(),
+      };
+
+      await exportDashboardToPDF(user, currentActiveTab, exportData);
+    } catch (error) {
+      console.error('Export failed:', error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const getCurrentActiveTab = (role) => {
+    switch (role) {
+      case 'admin': return active;
+      case 'field': return activeField;
+      case 'analyst': return activeAnalyst;
+      default: return 'overview';
+    }
+  };
+
+  const getCurrentMetrics = (role, activeTab) => {
+    // Sample metrics - you should replace these with real data from your dashboard state
+    const baseMetrics = [
+      { label: 'Report Generated', value: new Date().toLocaleDateString() },
+      { label: 'System Status', value: 'Operational' },
+      { label: 'Data Currency', value: 'Current' }
+    ];
+
+    const roleSpecificMetrics = {
+      admin: {
+        overview: [
+          { label: 'Total Datasets', value: '24' },
+          { label: 'Active Surveys', value: '18' },
+          { label: 'Data Quality Score', value: '94%' },
+          { label: 'Completion Rate', value: '87%' }
+        ],
+        completion: [
+          { label: 'Overall Completion', value: '76%' },
+          { label: 'Pending Surveys', value: '42' },
+          { label: 'Avg Completion Time', value: '3.2 days' },
+          { label: 'On-Time Rate', value: '89%' }
+        ],
+        predictive: [
+          { label: 'Model Accuracy', value: '92%' },
+          { label: 'Forecast Horizon', value: '30 days' },
+          { label: 'Confidence Level', value: '95%' },
+          { label: 'Trend Direction', value: 'Positive' }
+        ]
+      },
+      field: {
+        home: [
+          { label: 'My Assignments', value: '12' },
+          { label: 'Completed', value: '8' },
+          { label: 'Pending', value: '4' },
+          { label: 'Success Rate', value: '98%' }
+        ],
+        surveys: [
+          { label: 'Total Surveys', value: '24' },
+          { label: 'Draft', value: '3' },
+          { label: 'Submitted', value: '21' },
+          { label: 'Approval Rate', value: '95%' }
+        ]
+      },
+      analyst: {
+        a_home: [
+          { label: 'Reports Generated', value: '156' },
+          { label: 'Active Analyses', value: '8' },
+          { label: 'Data Sources', value: '12' },
+          { label: 'Processing Time', value: '2.1s avg' }
+        ],
+        a_data: [
+          { label: 'Datasets Analyzed', value: '45' },
+          { label: 'Data Points', value: '1.2M' },
+          { label: 'Query Performance', value: 'Excellent' },
+          { label: 'Data Freshness', value: '98%' }
+        ]
+      }
+    };
+
+    const specificMetrics = roleSpecificMetrics[role]?.[activeTab] || [];
+    return [...baseMetrics, ...specificMetrics];
+  };
 
   // ====== Logout ======
   function handleLogout() {
@@ -179,12 +273,19 @@ const [activeField, setActiveField] = useState("home");  // field tabs
               <span className="font-medium text-zinc-900">{labelForField(activeField)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <button className="btn-ghost"><Download size={16} /> Export</button>
+              <button 
+                className="btn-ghost" 
+                onClick={handleExport}
+                disabled={isExporting}
+              >
+                <Download size={16} /> 
+                {isExporting ? 'Generating PDF...' : 'Export PDF'}
+              </button>
               <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
           </header>
 
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+          <main id="main-content" className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
             {activeField === "home" && <FieldHome user={user} />}
             {activeField === "surveys" && <MySurveys user={user} />}
             {activeField === "assignments" && <Assignments user={user} />}
@@ -234,12 +335,19 @@ const [activeField, setActiveField] = useState("home");  // field tabs
               <span className="font-medium text-zinc-900">{labelForAnalyst(activeAnalyst)}</span>
             </div>
             <div className="flex items-center gap-2">
-              <button className="btn-ghost"><Download size={16} /> Export</button>
+              <button 
+                className="btn-ghost" 
+                onClick={handleExport}
+                disabled={isExporting}
+              >
+                <Download size={16} /> 
+                {isExporting ? 'Generating PDF...' : 'Export PDF'}
+              </button>
               <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
             </div>
           </header>
 
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+          <main id="main-content" className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
             {activeAnalyst === "a_home" && <AnalystHome user={user} />}
             {activeAnalyst === "a_reports" && <Reports />}
             {activeAnalyst === "a_generate" && <GenerateReports />}
@@ -270,7 +378,7 @@ const [activeField, setActiveField] = useState("home");  // field tabs
             active={active === "completion"} onClick={() => setActive("completion")} />
           <SideLink icon={<LineChart size={18} />} label="Predictive Insights"
             active={active === "predictive"} onClick={() => setActive("predictive")} />
-          <SideLink icon={<Lightbulb size={18} />} label="Prescriptive Insights"   // <-- NEW
+          <SideLink icon={<Lightbulb size={18} />} label="Prescriptive Insights"
             active={active === "prescriptive"} onClick={() => setActive("prescriptive")} />
           <SideLink icon={<Users size={18} />} label="Field Management"
             active={active === "field"} onClick={() => setActive("field")} />
@@ -293,12 +401,19 @@ const [activeField, setActiveField] = useState("home");  // field tabs
         <header className="h-14 border-b border-zinc-200 bg-white/70 backdrop-blur px-4 flex items-center justify-between">
           <Breadcrumb active={active} />
           <div className="flex items-center gap-2">
-            <button className="btn-ghost"><Download size={16} /> Export</button>
+            <button 
+              className="btn-ghost" 
+              onClick={handleExport}
+              disabled={isExporting}
+            >
+              <Download size={16} /> 
+              {isExporting ? 'Generating PDF...' : 'Export PDF'}
+            </button>
             <button className="btn-ghost text-rose-600" onClick={handleLogout}><LogOut size={16} /> Logout</button>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+        <main id="main-content" className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {active === "overview" && (
             <div>
               <h2 className="text-xl font-semibold mb-4">Dataset Analytics</h2>
@@ -308,7 +423,7 @@ const [activeField, setActiveField] = useState("home");  // field tabs
           )}
           {active === "completion" && <Completion />}
           {active === "predictive" && <Predictive />}
-          {active === "prescriptive" && <Prescriptive />} {/* <-- NEW */}
+          {active === "prescriptive" && <Prescriptive />}
           {active === "field" && <FieldMgmt />}
           {active === "audit" && <AuditTrail />}
           {active === "profile" && <AdminProfile user={user} />}
