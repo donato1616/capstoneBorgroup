@@ -55,7 +55,27 @@ const toggleSort = (field) => {
         const res = await fetch(`${API_BASE}/api/field/all`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setInterviewers(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          // Merge duplicates by name (case-insensitive)
+          const merged = Object.values(
+            data.reduce((acc, cur) => {
+              const key = (cur.name || "").trim().toLowerCase();
+              if (!key) return acc;
+
+              if (!acc[key]) {
+                acc[key] = { ...cur };
+              } else {
+                acc[key].completedCount += cur.completedCount;
+              }
+              return acc;
+            }, {})
+          );
+
+          setInterviewers(merged);
+        } else {
+          setInterviewers([]);
+        }
+
       } catch (err) {
         console.error("Error fetching interviewers:", err);
         setError("Failed to load interviewers.");
