@@ -8,12 +8,14 @@ export const exportDashboardToPDF = async (user, activeTab, additionalData = {})
     const pageHeight = pdf.internal.pageSize.getHeight();
     
     // Add header
-    pdf.setFillColor(79, 70, 65); // Olive color
+    pdf.setFillColor(36, 115, 54); // Olive color
     pdf.rect(0, 0, pageWidth, 30, 'F');
     
     pdf.setTextColor(255, 255, 255);
     pdf.setFontSize(20);
+    pdf.setFont(undefined, 'bold'); // Make title bold
     pdf.text('EBRS Insights - Analytical Report', pageWidth / 2, 15, { align: 'center' });
+    pdf.setFont(undefined, 'normal'); // Reset to normal for other text
     
     pdf.setFontSize(12);
     pdf.text(`Generated on: ${new Date().toLocaleDateString()}`, pageWidth / 2, 22, { align: 'center' });
