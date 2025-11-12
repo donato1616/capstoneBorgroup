@@ -60,7 +60,7 @@ export default function Completion() {
   const total = useMemo(() => (daily||[]).reduce((s,r)=>s + (r.value||0), 0), [daily]);
 
   return (
-    <div className="space-y-6">
+    <div data-analytics-section="completion" className="space-y-6">
       <DatasetSelector onSelectDataset={setDatasetId} />
       {!datasetId && <div className="p-4 text-sm text-zinc-600">Select a dataset</div>}
       {err && <div className="chip bg-amber-50 border-amber-300 text-amber-800">{err}</div>}

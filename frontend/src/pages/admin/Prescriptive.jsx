@@ -91,7 +91,7 @@ export default function PrescriptiveInsights() {
   );
 
   return (
-    <div className="space-y-4">
+    <div data-analytics-section="prescriptive" className="space-y-4">
       <div className="rounded-xl border border-zinc-200 bg-white p-4">
         <div className="text-lg font-semibold">Prescriptive Insights</div>
         <div className="text-sm text-zinc-600">

@@ -524,7 +524,7 @@ export default function PredictiveInsights() {
 
   // ---------------- render ----------------
   return (
-    <div className="space-y-4">
+    <div data-analytics-section="predictive" className="space-y-4">
       <DatasetSelector onSelectDataset={setDatasetId} />
 
       {!isValidDatasetId(datasetId) && (

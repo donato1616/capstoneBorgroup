@@ -1,0 +1,512 @@
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+
+export const exportDashboardToPDF = async (user, activeTab, additionalData = {}) => {
+  try {
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    
+    // Add header
+    pdf.setFillColor(79, 70, 65);
+    pdf.rect(0, 0, pageWidth, 30, 'F');
+    
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(20);
+    pdf.text('EBRS Insights - Analytical Report', pageWidth / 2, 15, { align: 'center' });
+    
+    pdf.setFontSize(12);
+    pdf.text(`Generated on: ${new Date().toLocaleDateString()}`, pageWidth / 2, 22, { align: 'center' });
+    
+    // Add user information
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFontSize(10);
+    let yPosition = 40;
+    
+    pdf.setFont(undefined, 'bold');
+    pdf.text('User Information:', 20, yPosition);
+    pdf.setFont(undefined, 'normal');
+    yPosition += 7;
+    pdf.text(`Name: ${user.name}`, 20, yPosition);
+    yPosition += 5;
+    pdf.text(`Role: ${user.role}`, 20, yPosition);
+    yPosition += 5;
+    pdf.text(`Current Section: ${getSectionName(user.role, activeTab)}`, 20, yPosition);
+    yPosition += 15;
+
+    // Capture current tab with dynamic insights
+    await captureCurrentTab(pdf, user, activeTab, yPosition);
+    
+    // Add footer to all pages
+    const pageCount = pdf.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      pdf.setPage(i);
+      pdf.setFontSize(8);
+      pdf.setTextColor(128, 128, 128);
+      pdf.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+      pdf.text('Confidential - EBRS Insights System Report', pageWidth / 2, pageHeight - 5, { align: 'center' });
+    }
+    
+    // Save the PDF
+    pdf.save(`EBRS-Report-${user.name}-${getSectionName(user.role, activeTab).replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`);
+    
+    return true;
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    alert('Error generating PDF report. Please try again.');
+    return false;
+  }
+};
+
+const captureCurrentTab = async (pdf, user, activeTab, startYPosition) => {
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  let yPosition = startYPosition;
+
+  // Add section title
+  pdf.setFont(undefined, 'bold');
+  pdf.text(`${getSectionName(user.role, activeTab)} - Analytical Findings`, 20, yPosition);
+  yPosition += 8;
+
+  // Generate dynamic insights based on visible content
+  const insights = await generateDynamicInsights(activeTab);
+  
+  pdf.setFont(undefined, 'normal');
+  const splitText = pdf.splitTextToSize(insights, pageWidth - 40);
+  pdf.text(splitText, 20, yPosition);
+  yPosition += (splitText.length * 5) + 10;
+
+  // Generate recommendations based on insights
+  const recommendations = generateRecommendationsFromInsights(activeTab, insights);
+  if (recommendations) {
+    if (yPosition > pageHeight - 50) {
+      pdf.addPage();
+      yPosition = 20;
+    }
+    
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Key Recommendations:', 20, yPosition);
+    pdf.setFont(undefined, 'normal');
+    yPosition += 7;
+    
+    const splitRec = pdf.splitTextToSize(recommendations, pageWidth - 40);
+    pdf.text(splitRec, 20, yPosition);
+    yPosition += (splitRec.length * 5) + 15;
+  }
+
+  // Capture current tab screenshot
+  await captureTabScreenshot(pdf, activeTab, yPosition);
+};
+
+const generateDynamicInsights = async (activeTab) => {
+  try {
+    // Get the main content element for analysis
+    const contentElement = document.querySelector(`[data-tab="${activeTab}"]`) || 
+                          document.querySelector(`[data-analytics-section="${activeTab}"]`) ||
+                          document.getElementById('main-content') ||
+                          document.querySelector('.dashboard-content');
+
+    if (!contentElement) {
+      return generateFallbackInsights(activeTab);
+    }
+
+    // Analyze visible charts, metrics, and data
+    const analysis = await analyzeDashboardContent(contentElement, activeTab);
+    
+    return formatInsights(analysis, activeTab);
+    
+  } catch (error) {
+    console.warn('Error generating dynamic insights:', error);
+    return generateFallbackInsights(activeTab);
+  }
+};
+
+const analyzeDashboardContent = async (element, activeTab) => {
+  const analysis = {
+    metrics: [],
+    trends: [],
+    anomalies: [],
+    comparisons: [],
+    keyFindings: []
+  };
+
+  // Extract numerical metrics from the dashboard
+  const metricElements = element.querySelectorAll('[data-metric], .metric, .stat, .value, .number, [class*="value"], [class*="metric"]');
+  metricElements.forEach(el => {
+    const text = el.textContent.trim();
+    const numbers = text.match(/\d+\.?\d*%/g) || text.match(/\d+\.?\d*/g);
+    if (numbers) {
+      numbers.forEach(num => {
+        const value = num.includes('%') ? parseFloat(num) : parseFloat(num);
+        if (!isNaN(value)) {
+          analysis.metrics.push({
+            value: value,
+            text: text,
+            element: el.className || el.tagName
+          });
+        }
+      });
+    }
+  });
+
+  // Look for trend indicators
+  const trendElements = element.querySelectorAll('[class*="trend"], [class*="change"], [class*="growth"], .arrow-up, .arrow-down, .positive, .negative');
+  trendElements.forEach(el => {
+    const text = el.textContent.trim();
+    const parentText = el.parentElement?.textContent.trim() || '';
+    analysis.trends.push({
+      direction: el.className.includes('up') || el.className.includes('positive') ? 'up' : 
+                 el.className.includes('down') || el.className.includes('negative') ? 'down' : 'neutral',
+      text: text,
+      context: parentText
+    });
+  });
+
+  // Look for chart data and patterns
+  const chartElements = element.querySelectorAll('canvas, svg, [class*="chart"], [class*="graph"]');
+  if (chartElements.length > 0) {
+    analysis.keyFindings.push(`Found ${chartElements.length} data visualization(s) displaying trends and patterns`);
+  }
+
+  // Look for tables with data
+  const tableElements = element.querySelectorAll('table');
+  tableElements.forEach((table, index) => {
+    const rows = table.querySelectorAll('tr');
+    if (rows.length > 1) {
+      analysis.keyFindings.push(`Data table with ${rows.length - 1} data rows analyzed`);
+    }
+  });
+
+  // Look for status indicators
+  const statusElements = element.querySelectorAll('[class*="status"], [class*="state"], .badge, .tag');
+  statusElements.forEach(el => {
+    const status = el.textContent.trim().toLowerCase();
+    if (status.includes('high') || status.includes('critical') || status.includes('warning')) {
+      analysis.anomalies.push(`Attention required: ${el.textContent.trim()}`);
+    }
+  });
+
+  // Tab-specific analysis
+  await performTabSpecificAnalysis(analysis, element, activeTab);
+
+  return analysis;
+};
+
+const performTabSpecificAnalysis = async (analysis, element, activeTab) => {
+  switch (activeTab) {
+    case 'overview':
+      await analyzeOverviewTab(analysis, element);
+      break;
+    case 'completion':
+      await analyzeCompletionTab(analysis, element);
+      break;
+    case 'predictive':
+      await analyzePredictiveTab(analysis, element);
+      break;
+    case 'prescriptive':
+      await analyzePrescriptiveTab(analysis, element);
+      break;
+    default:
+      await analyzeGenericTab(analysis, element, activeTab);
+  }
+};
+
+const analyzeOverviewTab = async (analysis, element) => {
+  // Look for completion rates, total counts, etc.
+  const completionMetrics = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('complete') || 
+    m.text.toLowerCase().includes('total') ||
+    m.text.toLowerCase().includes('survey')
+  );
+  
+  if (completionMetrics.length > 0) {
+    const completionRate = completionMetrics.find(m => m.text.includes('%'));
+    if (completionRate) {
+      analysis.keyFindings.push(`Overall completion rate: ${completionRate.value}%`);
+    }
+  }
+
+  // Look for data quality indicators
+  const qualityMetrics = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('quality') || 
+    m.text.toLowerCase().includes('score') ||
+    m.text.toLowerCase().includes('accuracy')
+  );
+  
+  if (qualityMetrics.length > 0) {
+    analysis.keyFindings.push(`Data quality metrics available with scores ranging across multiple indicators`);
+  }
+};
+
+const analyzeCompletionTab = async (analysis, element) => {
+  // Analyze completion-specific metrics
+  const completionRates = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('complete') && m.text.includes('%')
+  );
+  
+  const pendingItems = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('pending') || 
+    m.text.toLowerCase().includes('remaining')
+  );
+
+  if (completionRates.length > 0) {
+    const rates = completionRates.map(m => m.value);
+    const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+    analysis.keyFindings.push(`Average completion rate: ${avgRate.toFixed(1)}% across ${completionRates.length} metrics`);
+  }
+
+  if (pendingItems.length > 0) {
+    const totalPending = pendingItems.reduce((sum, item) => sum + item.value, 0);
+    analysis.keyFindings.push(`${totalPending} total items pending completion`);
+  }
+
+  // Look for timeline or progress indicators
+  const timeElements = element.querySelectorAll('[class*="time"], [class*="day"], [class*="hour"]');
+  if (timeElements.length > 0) {
+    analysis.keyFindings.push(`Timeline analysis shows progress tracking over time`);
+  }
+};
+
+const analyzePredictiveTab = async (analysis, element) => {
+  // Look for forecast, prediction, or future indicators
+  const forecastElements = element.querySelectorAll('[class*="forecast"], [class*="predict"], [class*="future"]');
+  const confidenceMetrics = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('confidence') || 
+    m.text.toLowerCase().includes('accuracy') ||
+    m.text.toLowerCase().includes('probability')
+  );
+
+  if (forecastElements.length > 0) {
+    analysis.keyFindings.push(`Predictive models forecasting future trends and patterns`);
+  }
+
+  if (confidenceMetrics.length > 0) {
+    const confidenceLevels = confidenceMetrics.map(m => m.value);
+    const avgConfidence = confidenceLevels.reduce((a, b) => a + b, 0) / confidenceLevels.length;
+    analysis.keyFindings.push(`Model confidence levels averaging ${avgConfidence.toFixed(1)}%`);
+  }
+
+  // Look for trend lines in charts
+  const chartContainers = element.querySelectorAll('[class*="chart"], [class*="graph"]');
+  if (chartContainers.length > 0) {
+    analysis.keyFindings.push(`Trend analysis using historical data patterns`);
+  }
+};
+
+const analyzePrescriptiveTab = async (analysis, element) => {
+  // Look for recommendation, suggestion, or action items
+  const recommendationElements = element.querySelectorAll('[class*="recommend"], [class*="suggest"], [class*="action"], .recommendation, .suggestion');
+  const impactMetrics = analysis.metrics.filter(m => 
+    m.text.toLowerCase().includes('impact') || 
+    m.text.toLowerCase().includes('saving') ||
+    m.text.toLowerCase().includes('efficiency')
+  );
+
+  if (recommendationElements.length > 0) {
+    analysis.keyFindings.push(`${recommendationElements.length} actionable recommendations identified`);
+  }
+
+  if (impactMetrics.length > 0) {
+    analysis.keyFindings.push(`Potential efficiency improvements and impact metrics quantified`);
+  }
+
+  // Look for priority indicators
+  const priorityElements = element.querySelectorAll('[class*="priority"], [class*="urgent"], .high-priority');
+  if (priorityElements.length > 0) {
+    analysis.keyFindings.push(`Priority-based recommendations with urgency indicators`);
+  }
+};
+
+const analyzeGenericTab = async (analysis, element, activeTab) => {
+  // Generic analysis for other tabs
+  const totalMetrics = analysis.metrics.length;
+  const hasTrends = analysis.trends.length > 0;
+  const hasCharts = element.querySelectorAll('canvas, svg').length > 0;
+
+  analysis.keyFindings.push(`Analysis of ${totalMetrics} key performance indicators`);
+  if (hasTrends) {
+    analysis.keyFindings.push(`Trend analysis showing directional patterns`);
+  }
+  if (hasCharts) {
+    analysis.keyFindings.push(`Data visualizations providing comprehensive overview`);
+  }
+};
+
+const formatInsights = (analysis, activeTab) => {
+  let insights = `Based on the current ${getSectionName('admin', activeTab).toLowerCase()} analysis, the following insights were derived:\n\n`;
+
+  // Add key findings
+  if (analysis.keyFindings.length > 0) {
+    insights += 'Key Findings:\n';
+    analysis.keyFindings.forEach((finding, index) => {
+      insights += `• ${finding}\n`;
+    });
+    insights += '\n';
+  }
+
+  // Add metric summary
+  if (analysis.metrics.length > 0) {
+    const percentages = analysis.metrics.filter(m => m.value <= 100);
+    const counts = analysis.metrics.filter(m => m.value > 100 || !m.text.includes('%'));
+    
+    if (percentages.length > 0) {
+      const avgPercentage = percentages.reduce((sum, m) => sum + m.value, 0) / percentages.length;
+      insights += `Performance metrics show an average rate of ${avgPercentage.toFixed(1)}% across ${percentages.length} indicators.\n`;
+    }
+    
+    if (counts.length > 0) {
+      insights += `Tracking ${counts.length} quantitative measures with current status indicators.\n`;
+    }
+  }
+
+  // Add trend analysis
+  if (analysis.trends.length > 0) {
+    const upwardTrends = analysis.trends.filter(t => t.direction === 'up').length;
+    const downwardTrends = analysis.trends.filter(t => t.direction === 'down').length;
+    
+    insights += `\nTrend Analysis: ${upwardTrends} indicators showing improvement, ${downwardTrends} requiring attention.\n`;
+  }
+
+  // Add anomalies if any
+  if (analysis.anomalies.length > 0) {
+    insights += `\nAreas Requiring Attention:\n`;
+    analysis.anomalies.forEach(anomaly => {
+      insights += `• ${anomaly}\n`;
+    });
+  }
+
+  return insights;
+};
+
+const generateRecommendationsFromInsights = (activeTab, insights) => {
+  // Generate recommendations based on the insights content
+  let recommendations = '';
+
+  if (insights.includes('low') || insights.includes('down') || insights.includes('attention')) {
+    recommendations += "1. Review areas showing decline or below-target performance\n";
+    recommendations += "2. Allocate additional resources to improve critical metrics\n";
+  }
+
+  if (insights.includes('high') || insights.includes('up') || insights.includes('improvement')) {
+    recommendations += "1. Leverage successful strategies from high-performing areas\n";
+    recommendations += "2. Document best practices for consistent performance\n";
+  }
+
+  if (insights.includes('trend') || insights.includes('pattern')) {
+    recommendations += "1. Monitor ongoing trends for proactive decision-making\n";
+    recommendations += "2. Adjust forecasts based on current trajectory\n";
+  }
+
+  if (insights.includes('completion') || insights.includes('pending')) {
+    recommendations += "1. Prioritize completion of outstanding items\n";
+    recommendations += "2. Streamline processes to improve efficiency\n";
+  }
+
+  // Add tab-specific recommendations
+  switch (activeTab) {
+    case 'predictive':
+      recommendations += "1. Validate predictive models with recent actual data\n";
+      recommendations += "2. Adjust parameters based on model performance\n";
+      break;
+    case 'prescriptive':
+      recommendations += "1. Implement high-impact recommendations first\n";
+      recommendations += "2. Establish metrics to track recommendation effectiveness\n";
+      break;
+    case 'completion':
+      recommendations += "1. Address bottlenecks in completion processes\n";
+      recommendations += "2. Set incremental targets for gradual improvement\n";
+      break;
+  }
+
+  return recommendations || "1. Continue monitoring key performance indicators\n2. Schedule regular review of analytical findings";
+};
+
+const captureTabScreenshot = async (pdf, activeTab, startYPosition) => {
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  let yPosition = startYPosition;
+
+  try {
+    if (yPosition > pageHeight - 100) {
+      pdf.addPage();
+      yPosition = 20;
+    }
+    
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Current Dashboard View:', 20, yPosition);
+    yPosition += 7;
+
+    const tabContentElement = document.querySelector(`[data-tab="${activeTab}"]`) || 
+                             document.querySelector(`[data-analytics-section="${activeTab}"]`) ||
+                             document.getElementById('main-content') ||
+                             document.querySelector('.dashboard-content') ||
+                             document.body;
+
+    if (tabContentElement) {
+      const canvas = await html2canvas(tabContentElement, {
+        scale: 0.7,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        scrollY: -window.scrollY
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.8);
+      const imgWidth = pageWidth - 40;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
+      if (yPosition + imgHeight > pageHeight - 20) {
+        pdf.addPage();
+        yPosition = 20;
+      }
+
+      pdf.addImage(imgData, 'JPEG', 20, yPosition, imgWidth, imgHeight);
+    }
+  } catch (screenshotError) {
+    console.warn('Could not capture dashboard screenshot:', screenshotError);
+  }
+};
+
+const generateFallbackInsights = (activeTab) => {
+  // Fallback insights when dynamic analysis fails
+  const fallbacks = {
+    overview: "Comprehensive dataset analysis showing overall system performance, completion metrics, and data quality indicators. Review key performance metrics for operational insights.",
+    completion: "Completion analytics tracking survey progress, researcher productivity, and pending assignments. Monitor completion rates and identify areas for process improvement.",
+    predictive: "Predictive models forecasting future trends based on historical patterns. Analyze forecast accuracy and confidence intervals for informed decision-making.",
+    prescriptive: "Actionable recommendations derived from data analysis and optimization algorithms. Focus on high-impact suggestions for operational efficiency."
+  };
+
+  return fallbacks[activeTab] || "Detailed analysis of current dashboard metrics and performance indicators. Review key findings for data-driven insights.";
+};
+
+// Keep your existing helper functions (getSectionName, etc.)
+const getSectionName = (role, activeTab) => {
+  const sections = {
+    admin: {
+      overview: 'Dataset Overview',
+      completion: 'Completion Analytics',
+      predictive: 'Predictive Insights',
+      prescriptive: 'Prescriptive Insights',
+      field: 'Field Management',
+      audit: 'Audit Trail',
+      profile: 'Admin Profile'
+    },
+    field: {
+      home: 'Field Dashboard',
+      surveys: 'My Surveys',
+      assignments: 'Assignments',
+      uploads: 'Uploads',
+      announcements: 'Announcements',
+      profile: 'Field Profile'
+    },
+    analyst: {
+      a_home: 'Analyst Dashboard',
+      a_reports: 'Reports',
+      a_generate: 'Generate Reports',
+      a_data: 'Data Explorer',
+      a_profile: 'Analyst Profile'
+    }
+  };
+  
+  return sections[role]?.[activeTab] || 'Dashboard';
+};
