@@ -1,4 +1,3 @@
-// src/pages/Login.jsx
 import { Shield, User, Users, BarChart3, Eye, EyeOff, CheckCircle2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -43,7 +42,7 @@ export default function Login({ onLogin }) {
     setError("");
 
     try {
-      const res = await fetch("/api/login", {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE || "http://localhost:5050"}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, name, password: pw }),
