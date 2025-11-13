@@ -17,10 +17,10 @@ dotenv.config();
 const app = express();
 
 // ---- Config ----
-const PORT = Number(process.env.PORT || 5050);
+const PORT = Number(process.env.PORT || 8080); // Use dynamic PORT (or default to 8080 for local dev)
 
 // Use the environment variable or default to the production Railway frontend URL
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "https://capstoneborgroup-production.up.railway.app";
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "https://capstoneborgroup-production.up.railway.app"; // Production frontend URL
 
 // Allow-list dev origins and production origin
 const allowedOrigins = new Set([
