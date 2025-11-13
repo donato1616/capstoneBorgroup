@@ -1,7 +1,6 @@
 // src/pages/Login.jsx
 import { Shield, User, Users, BarChart3, Eye, EyeOff, CheckCircle2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import Signup from "./SignUp.jsx"; //ignore this. This function was deleted
 
 export default function Login({ onLogin }) {
   const [role, setRole] = useState(() => localStorage.getItem("auth_role") || null);
