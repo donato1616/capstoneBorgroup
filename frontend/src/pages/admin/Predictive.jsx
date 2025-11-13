@@ -12,6 +12,12 @@ function isValidDatasetId(datasetId) {
   return datasetId && datasetId.length > 0 && datasetId !== 'undefined' && datasetId !== 'null';
 }
 
+const normalizeDate = (s) => {
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? String(s).slice(0,10) : d.toISOString().slice(0,10);
+};
+const sortByDate = (arr) => arr.slice().sort((a,b) => (a.date > b.date ? 1 : (a.date < b.date ? -1 : 0)));
+
 // --- NEW: normalize backend metric keys (snake vs camel) ---
 function normalizeMetrics(m) {
   if (!m) return m;
@@ -383,30 +389,63 @@ export default function PredictiveInsights() {
   // Enhanced combined series with confidence intervals
   const combinedSeries = useMemo(() => {
     if (mode === 'respondents' && data) {
-      const historyData = data.history || [];
-      const forecastData = data.horizon || [];
+      const rawHistory = (data.history || []).map(x => ({
+        date: normalizeDate(x.date),
+        actual: x.actual,
+        fitted: x.fitted,
+        confidence_lower: x.confidence_lower,
+        confidence_upper: x.confidence_upper
+      }));
+      const historyData = sortByDate(rawHistory);
+      
+      const rawHorizon = (data.horizon || []).map(x => ({
+        date: normalizeDate(x.date),
+        projected: x.projected,
+        confidence_lower: x.confidence_lower,
+        confidence_upper: x.confidence_upper
+      }));
+      const forecastData = sortByDate(rawHorizon);
       
       const series = [
-        { 
-          name: 'Actual',  
-          data: historyData.map(x => ({ 
-            date: x.date, 
+        {
+          name: 'Actual',
+          data: historyData.map(x => ({
+            date: x.date,
             value: x.actual,
             confidence_lower: x.confidence_lower,
             confidence_upper: x.confidence_upper
-          })) 
+          }))
         },
-        { 
-          name: 'Fitted',  
-          data: historyData.map(x => ({ 
-            date: x.date, 
+        {
+          name: 'Fitted',
+          data: historyData.map(x => ({
+            date: x.date,
             value: x.fitted,
             confidence_lower: x.confidence_lower,
             confidence_upper: x.confidence_upper
-          })) 
+          }))
         }
       ];
-
+      
+      if (forecastData.length > 0) {
+        series.push({
+          name: 'Forecast',
+          data: [
+            ...(historyData.length > 0 ? [{
+              date: historyData[historyData.length - 1].date,
+              value: historyData[historyData.length - 1].fitted,
+              confidence_lower: historyData[historyData.length - 1].confidence_lower,
+              confidence_upper: historyData[historyData.length - 1].confidence_upper
+            }] : []),
+            ...forecastData.map(x => ({
+              date: x.date,
+              value: x.projected,
+              confidence_lower: x.confidence_lower,
+              confidence_upper: x.confidence_upper
+            }))
+          ]
+        });
+      }
       if (forecastData.length > 0) {
         series.push({ 
           name: 'Forecast', 
@@ -436,29 +475,17 @@ export default function PredictiveInsights() {
   const numSeries = useMemo(() => {
     if (!numData?.history || !numData?.horizon) return [];
     
-    const historyData = numData.history || [];
-    const forecastData = numData.horizon || [];
-    
-    return [
-      { 
-        name: 'Actual', 
-        data: historyData.map(x => ({ date: x.date, value: x.actual })) 
-      },
-      { 
-        name: 'Fitted', 
-        data: historyData.map(x => ({ date: x.date, value: x.fitted })) 
-      },
-      { 
-        name: 'Forecast', 
-        data: [
-          ...(historyData.length > 0 ? [{
-            date: historyData[historyData.length - 1].date,
-            value: historyData[historyData.length - 1].fitted
-          }] : []),
-          ...forecastData.map(x => ({ date: x.date, value: x.projected }))
-        ]
-      }
-    ];
+    const historyData = sortByDate((numData.history || []).map(x => ({ date: normalizeDate(x.date), actual: x.actual, fitted: x.fitted })));
+const forecastData = sortByDate((numData.horizon || []).map(x => ({ date: normalizeDate(x.date), projected: x.projected })));
+
+return [
+  { name: 'Actual',  data: historyData.map(x => ({ date: x.date, value: x.actual })) },
+  { name: 'Fitted',  data: historyData.map(x => ({ date: x.date, value: x.fitted })) },
+  { name: 'Forecast', data: [
+      ...(historyData.length ? [{ date: historyData[historyData.length-1].date, value: historyData[historyData.length-1].fitted }] : []),
+      ...forecastData.map(x => ({ date: x.date, value: x.projected }))
+  ] }
+];
   }, [numData]);
 
   // categorical question series (multiple labels)
@@ -469,8 +496,8 @@ export default function PredictiveInsights() {
     const categories = catData.labels.slice(0, catTopK);
     
     categories.forEach((label) => {
-      const historyData = catData.series?.[label] || [];
-      const forecastData = catData.horizon?.[label] || [];
+      const historyData = sortByDate((catData.series?.[label] || []).map(x => ({ date: normalizeDate(x.date), actual: x.actual, fitted: x.fitted })));
+      const forecastData = sortByDate((catData.horizon?.[label] || []).map(x => ({ date: normalizeDate(x.date), projected: x.projected })));
       
       out.push({ 
         name: `${label} - Actual`,  
@@ -721,10 +748,11 @@ export default function PredictiveInsights() {
                     yLabel={unit}
                     xLabel="Date"
                     showConfidence={true}
+                    colorMap={{ Actual: '#0ea5e9', Fitted: '#16a34a', Forecast: '#f59e0b' }} // teal-blue, green, amber
                   />
                   <div className="mt-3 text-xs text-zinc-500 grid grid-cols-3 gap-2">
                     <div><span className="inline-block w-3 h-3 bg-[#0ea5e9] mr-1"></span> Actual: Historical data points</div>
-                    <div><span className="inline-block w-3 h-3 bg-[#6366f1] mr-1"></span> Fitted: Model predictions for historical period</div>
+                    <div><span className="inline-block w-3 h-3 bg-[#16a34a] mr-1"></span> Fitted: Model predictions for historical period</div>
                     <div><span className="inline-block w-3 h-3 bg-[#f59e0b] mr-1 border border-amber-600"></span> Forecast: 7-day future projections</div>
                   </div>
                   {data?.history?.[0]?.confidence_lower != null && (

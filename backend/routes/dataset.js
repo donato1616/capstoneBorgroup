@@ -24,7 +24,14 @@ const FORECASTING_MIN_POINTS = Number(process.env.FORECASTING_MIN_POINTS || 10);
 const FORECASTING_MIN_DAYS = Number(process.env.FORECASTING_MIN_DAYS || 7);
 const FORECASTING_MIN_VARIANCE = Number(process.env.FORECASTING_MIN_VARIANCE || 0.1);
 
-
+// --- date helper (normalize to YYYY-MM-DD in UTC) ---
+function isoDate(d) {
+  try {
+    return (d instanceof Date) ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+  } catch { 
+    return String(d).slice(0, 10);
+  }
+}
 // --------- Enhanced Forecasting Diagnostics ---------
 function analyzeForecastingReadiness(dailySeries, datasetInfo = {}) {
   const points = dailySeries.length;
@@ -1200,7 +1207,7 @@ router.get('/:id/forecasting-diagnostics', async (req, res) => {
     `;
 
     const series = (daily || []).map(r => ({
-      date: String(r.day),
+      date: isoDate(r.day),
       count: Number(r.completed || 0),
       completed: Number(r.completed || 0)
     }));
@@ -1277,7 +1284,7 @@ router.get('/:id/predict/regression', async (req, res) => {
       ORDER BY day
     `;
     
-    let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: String(r.day) }));
+    let pts = (daily || []).map((r, i) => ({ x: i, y: Number(r.completed || 0), date: isoDate(r.day) }));
     let synthetic = false;
 
     // Enhanced synthetic data generation for very short series
@@ -1611,10 +1618,10 @@ router.get('/:id/predict/question/numeric', async (req, res) => {
     }
 
     const series = rows.map(r => ({
-      date: String(r.day),
+      date: isoDate(r.day),
       y: agg === 'sum' ? Number(r.sum || 0)
-         : agg === 'count' ? Number(r.n || 0)
-         : Number(r.avg || 0)
+           : agg === 'count' ? Number(r.n || 0)
+           : Number(r.avg || 0)
     })).filter(r => Number.isFinite(r.y));
 
     const pts = series.map((r,i)=>({ x:i, y:r.y, date:r.date }));
@@ -1709,7 +1716,7 @@ router.get('/:id/predict/question/categorical', async (req, res) => {
     for (const L of labels) byLabel.set(L, []);
     for (const r of rows) {
       const y = asShare ? (r.total ? (r.c / r.total) : 0) : r.c;
-      byLabel.get(r.label).push({ date: String(r.day), y: Number(y) });
+      byLabel.get(r.label).push({ date: isoDate(r.day), y: Number(y) });
     }
 
     const series = {};
