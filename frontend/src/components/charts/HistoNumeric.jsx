@@ -12,9 +12,14 @@ import {
     return (
       <div style={{ width: '100%', height }}>
         <ResponsiveContainer>
-          <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+          <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 30 }}> {/* Increased bottom margin */}
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" interval={0} tick={{ fontSize: 11 }} />
+            <XAxis 
+              dataKey="name" 
+              interval={0} 
+              tick={{ fontSize: 11, angle: -45, textAnchor: 'end' }} 
+              height={60} // Increased height for rotated labels
+            />
             <YAxis />
             <Tooltip />
             <Bar dataKey="value">
