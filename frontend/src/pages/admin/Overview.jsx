@@ -110,7 +110,7 @@ export default function Overview({ selectedDataset }) {
             disabled={!selectedDataset}
             title="Delete dataset"
           >
-            Delete dataset
+            Archive dataset
           </button>
         </div>
       </div>
