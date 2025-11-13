@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5050',
+        target: `${process.env.VITE_API_BASE || 'http://localhost:5050'}`,  // Dynamically use VITE_API_BASE or fall back to localhost for local dev
         changeOrigin: true,
         secure: false, // disables SSL verification for local dev
       },

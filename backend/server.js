@@ -18,28 +18,32 @@ const app = express();
 
 // ---- Config ----
 const PORT = Number(process.env.PORT || 5050);
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 
-// Allow-list dev origins (add more if needed)
+// Use the environment variable or default to the production Railway frontend URL
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "https://capstoneborgroup-production.up.railway.app";
+
+// Allow-list dev origins and production origin
 const allowedOrigins = new Set([
-  FRONTEND_ORIGIN,
-  "http://127.0.0.1:5173",
-  "http://localhost:4173",
-  "http://127.0.0.1:4173",
+  FRONTEND_ORIGIN, // Railway frontend URL
+  "http://localhost:5173", // Local dev (React's default)
+  "http://127.0.0.1:5173", // Local dev (React's default)
+  "http://localhost:4173", // Alternative local dev port
+  "http://127.0.0.1:4173", // Alternative local dev port
 ]);
 
 // ---- CORS ----
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // same-origin/server-to-server
-    if (allowedOrigins.has(origin)) return cb(null, true);
+    if (!origin) return cb(null, true); // Allow same-origin/server-to-server requests
+    if (allowedOrigins.has(origin)) return cb(null, true); // Allow if in allowedOrigins
     return cb(new Error("Not allowed by CORS"));
   },
-  credentials: true,
+  credentials: true, // Allow credentials like cookies to be sent
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  optionsSuccessStatus: 204,
+  optionsSuccessStatus: 204, // Success status code for pre-flight requests
 };
+
 app.use(cors(corsOptions));
 
 // ---- Body parsing ----
