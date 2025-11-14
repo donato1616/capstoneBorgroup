@@ -170,16 +170,6 @@ export default function AnalystHome({ user }) {
                 />
             }
           </Card>
-
-          {/* Quick Actions */}
-          <Card className="p-4">
-            <div className="text-sm font-medium mb-2">Quick Actions</div>
-            <ul className="list-disc list-inside text-sm text-zinc-600 space-y-1">
-              <li>Generate "Completion by Region" report</li>
-              <li>Open Data Explorer for outliers</li>
-              <li>Export current dataset analysis</li>
-            </ul>
-          </Card>
         </>
       )}
     </div>

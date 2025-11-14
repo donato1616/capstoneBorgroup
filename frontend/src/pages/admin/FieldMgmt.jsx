@@ -18,6 +18,14 @@ export default function FieldMgmt() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState("name");
   const [sortOrder, setSortOrder] = useState("asc");
+  const [annOpen, setAnnOpen] = useState(false);
+  const [annForm, setAnnForm] = useState({
+    title: "",
+    announcement: "",
+    role: "field",
+    post_till: "",
+  });
+
 
 // --- Derived data ---
 const filteredInterviewers = useMemo(() => {
@@ -46,6 +54,39 @@ const toggleSort = (field) => {
     setSortOrder("asc");
   }
 };
+
+const submitAnnouncement = async () => {
+  const payload = {
+    title: annForm.title.trim(),
+    announcement: annForm.announcement.trim(),
+    role: annForm.role,
+    post_till: annForm.post_till,
+  };
+
+  if (!payload.title || !payload.announcement || !payload.post_till) {
+    return alert("All fields are required.");
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/announcements/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+
+    if (!res.ok) return alert(body?.error || "Failed to create announcement.");
+
+    alert("Announcement posted.");
+    setAnnOpen(false);
+    setAnnForm({ title: "", announcement: "", role: "field", post_till: "" });
+  } catch (err) {
+    console.error("Announcement error:", err);
+    alert("Failed to create announcement.");
+  }
+};
+
 
   // Fetch interviewers
   useEffect(() => {
@@ -160,6 +201,22 @@ const toggleSort = (field) => {
 
   return (
     <div className="space-y-4">
+          
+      {/* ---------------- Announcements Panel ---------------- */}
+      <Card>
+        <div className="p-4 border-b flex items-center justify-between">
+          <div className="text-sm font-medium">Announcements</div>
+          <button className="btn btn-primary" onClick={() => setAnnOpen(true)}>
+            + Create Announcement
+          </button>
+        </div>
+
+        <div className="p-4 text-xs text-zinc-500">
+          These announcements will appear on the Field Researcher UI.
+        </div>
+      </Card>
+
+
       <div className="flex items-center justify-between">
         <div className="text-sm font-medium">Field Interviewers</div>
         <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
@@ -283,6 +340,58 @@ const toggleSort = (field) => {
           </div>
         </form>
       </NeatModal>
+
+      <NeatModal open={annOpen} onClose={() => setAnnOpen(false)} title="Create Announcement">
+        <form
+          className="grid grid-cols-1 gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitAnnouncement();
+          }}
+        >
+          <Label>Title</Label>
+          <Input
+            value={annForm.title}
+            onChange={(e) => setAnnForm({ ...annForm, title: e.target.value })}
+            placeholder="Short headline..."
+          />
+
+          <Label>Announcement</Label>
+          <textarea
+            className="input w-full rounded-xl border px-3 py-2 text-sm shadow-sm h-28"
+            value={annForm.announcement}
+            onChange={(e) => setAnnForm({ ...annForm, announcement: e.target.value })}
+            placeholder="Write announcement"
+          />
+
+          <Label>Role</Label>
+          <select
+            className="input w-full rounded-xl border px-3 py-2 text-sm shadow-sm"
+            value={annForm.role}
+            onChange={(e) => setAnnForm({ ...annForm, role: e.target.value })}
+          >
+            <option value="field">Field Researchers</option>
+            <option value="analyst">Analysts</option>
+          </select>
+
+          <Label>Post until</Label>
+          <Input
+            type="datetime-local"
+            value={annForm.post_till}
+            onChange={(e) => setAnnForm({ ...annForm, post_till: e.target.value })}
+          />
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn btn-ghost" onClick={() => setAnnOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Post
+            </button>
+          </div>
+        </form>
+      </NeatModal>
+
     </div>
   );
 }

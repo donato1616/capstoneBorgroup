@@ -313,9 +313,9 @@ function MainApp() {
 
           <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
             <SideLink icon={<LayoutDashboard size={18} />} label="Dashboard" active={activeAnalyst === "a_home"} onClick={() => setActiveAnalyst("a_home")} />
-            <SideLink icon={<FileText size={18} />} label="Reports" active={activeAnalyst === "a_reports"} onClick={() => setActiveAnalyst("a_reports")} />
-            <SideLink icon={<FilePlus2 size={18} />} label="Generate Reports" active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
-            <SideLink icon={<Database size={18} />} label="Data Explorer" active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
+            <SideLink icon={<FileText size={18} />} label="Predictive Insights" active={activeAnalyst === "a_reports"} onClick={() => setActiveAnalyst("a_reports")} />
+            <SideLink icon={<Lightbulb size={18} />} label="Prescriptive Insights" active={activeAnalyst === "a_generate"} onClick={() => setActiveAnalyst("a_generate")} />
+            <SideLink icon={<Megaphone size={18} />} label="Announcements" active={activeAnalyst === "a_data"} onClick={() => setActiveAnalyst("a_data")} />
             <div className="pt-2">
               <div className="px-3 text-[10px] uppercase tracking-wider text-white/70">Account</div>
               <SideLink icon={<UserCircle size={18} />} label="Profile" active={activeAnalyst === "a_profile"} onClick={() => setActiveAnalyst("a_profile")} />
@@ -463,8 +463,8 @@ function labelForField(key) {
 function labelForAnalyst(key) {
   switch (key) {
     case "a_home": return "Dashboard";
-    case "a_reports": return "Reports";
-    case "a_generate": return "Generate Reports";
+    case "a_reports": return "Predictive Insights";
+    case "a_generate": return "Prescriptive Insights";
     case "a_data": return "Data Explorer";
     case "a_profile": return "Profile";
     default: return "Dashboard";

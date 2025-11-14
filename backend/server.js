@@ -10,6 +10,7 @@ import auditRoute from "./routes/audit.js";
 import datasetRoute from "./routes/dataset.js";
 import userRoutes from "./routes/users.js";
 import authRoutes from "./routes/auth.js";
+import announcementRoutes from "./routes/announcements.js";
 import fieldRouter from "./api/field.js";
 
 dotenv.config();
@@ -67,6 +68,7 @@ app.get("/health/db", async (_req, res) => {
 // ---- Routes ----
 app.use("/api/audit", auditRoute);
 app.use("/api/dataset", datasetRoute);
+app.use("/api/announcements", announcementRoutes);
 app.use("/api/field", fieldRouter);
 app.use("/api/users", userRoutes);
 app.use("/api", authRoutes);

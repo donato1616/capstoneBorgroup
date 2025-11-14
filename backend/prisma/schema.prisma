@@ -94,3 +94,12 @@ model Analysts {
   id   String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name String? @db.VarChar(50)
 }
+
+model Announcements {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  announcement String
+  role         String   @db.VarChar(50)
+  date_posted  DateTime @default(now()) @db.Timestamptz(6)
+  post_till    DateTime @db.Timestamptz(6)
+  title        String   @db.VarChar(100)
+}
