@@ -52,4 +52,25 @@ router.get("/field", async (req, res) => {
   }
 });
 
+router.get("/analyst", async (req, res) => {
+  try {
+    const announcements = await prisma.announcements.findMany({
+      where: {
+        role: "analyst", // Only get announcements for field researchers
+        post_till: {
+          gt: new Date() // Only get announcements that haven't expired
+        }
+      },
+      orderBy: {
+        date_posted: 'desc' // Most recent first
+      }
+    });
+
+    res.json(announcements);
+  } catch (err) {
+    console.error("Error fetching field announcements:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
 export default router;

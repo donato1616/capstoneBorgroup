@@ -68,7 +68,7 @@ const submitAnnouncement = async () => {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/announcements/create`, {
+    const res = await fetch('${API_BASE}/api/announcements/create', {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
